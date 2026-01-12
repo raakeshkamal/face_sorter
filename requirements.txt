@@ -1,0 +1,16 @@
+click
+faiss-cpu
+insightface
+line-profiler
+numpy
+onnxruntime
+onnxruntime-silicon; sys_platform == 'darwin' and platform_machine == 'arm64'
+opencv-python
+Pillow
+pillow-heif
+psutil
+pymongo
+scikit-learn
+torch
+transformers
+tqdm

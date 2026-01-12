@@ -33,10 +33,10 @@ from mongo_db import *
 @line_profiler.profile
 def cli(build_cache, run, train, add_class, rm_class, get_all_class):
 
-    SRC_DIR = "/Volumes/data_sets/new_backup/images"
-    NOFACE_DIR = "/Volumes/data_sets/new_backup/noface"
-    BROKEN_DIR = "/Volumes/data_sets/new_backup/broken"
-    CACHE_DIR = "/Volumes/data_sets/new_backup/.cache"
+    SRC_DIR = "/Volumes/data_sets/fresh_backup/images"
+    NOFACE_DIR = "/Volumes/data_sets/fresh_backup/noface"
+    BROKEN_DIR = "/Volumes/data_sets/fresh_backup/broken"
+    CACHE_DIR = "/Volumes/data_sets/fresh_backup/.cache"
 
     """Command-line interface for the application."""
     # Check if any valid options were provided
