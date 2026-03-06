@@ -217,3 +217,115 @@ class CacheResult:
         if self.processed == 0:
             return 0.0
         return ((self.processed - self.failed) / self.processed) * 100
+
+
+class DuplicateMoveResult:
+    """
+    Represents the result of moving duplicate files.
+
+    Attributes:
+        moved: Number of duplicate files successfully moved.
+        failed: Number of files that failed to move.
+        total_duplicates: Total number of duplicates found.
+    """
+
+    def __init__(self, moved: int, failed: int, total_duplicates: int) -> None:
+        self.moved = moved
+        self.failed = failed
+        self.total_duplicates = total_duplicates
+
+    def success_rate(self) -> float:
+        """Return success rate of move operation."""
+        if self.total_duplicates == 0:
+            return 0.0
+        return (self.moved / self.total_duplicates) * 100
+
+
+class DeduplicationResult:
+    """
+    Represents the result of a deduplication operation.
+
+    Attributes:
+        total_images: Total number of images processed.
+        duplicate_groups: Number of duplicate groups found.
+        total_duplicates: Total number of duplicate images found.
+        moved_duplicates: Number of duplicate files moved to duplicates_dir.
+        cache_loaded: Whether embeddings were loaded from cache.
+        cache_saved: Whether embeddings were saved to cache.
+        duplicates_dir: Directory where duplicates were moved.
+    """
+
+    def __init__(
+        self,
+        total_images: int,
+        duplicate_groups: int,
+        total_duplicates: int,
+        moved_duplicates: int,
+        cache_loaded: bool = False,
+        cache_saved: bool = False,
+        duplicates_dir: Optional[str] = None,
+    ) -> None:
+        self.total_images = total_images
+        self.duplicate_groups = duplicate_groups
+        self.total_duplicates = total_duplicates
+        self.moved_duplicates = moved_duplicates
+        self.cache_loaded = cache_loaded
+        self.cache_saved = cache_saved
+        self.duplicates_dir = duplicates_dir
+
+    def deduplication_rate(self) -> float:
+        """Return percentage of images that are duplicates."""
+        if self.total_images == 0:
+            return 0.0
+        return (self.total_duplicates / self.total_images) * 100
+
+
+class CleanResult:
+    """
+    Represents the result of a dataset cleaning operation.
+
+    Attributes:
+        processed: Number of images processed.
+        total: Total number of images found.
+        successful: Number of successfully cleaned images.
+        failed: Number of images that failed to clean.
+        moved_to_broken: Number of files moved to broken directory.
+        output_dir: Directory where cleaned images were saved.
+        broken_dir: Directory where broken images were moved.
+        start_index: Starting index used for naming.
+        end_index: Ending index used for naming.
+    """
+
+    def __init__(
+        self,
+        processed: int,
+        total: int,
+        successful: int,
+        failed: int,
+        moved_to_broken: int,
+        output_dir: str,
+        broken_dir: str,
+        start_index: int,
+        end_index: int,
+    ) -> None:
+        self.processed = processed
+        self.total = total
+        self.successful = successful
+        self.failed = failed
+        self.moved_to_broken = moved_to_broken
+        self.output_dir = output_dir
+        self.broken_dir = broken_dir
+        self.start_index = start_index
+        self.end_index = end_index
+
+    def success_rate(self) -> float:
+        """Return success rate of cleaning operation."""
+        if self.processed == 0:
+            return 0.0
+        return (self.successful / self.processed) * 100
+
+    def broken_rate(self) -> float:
+        """Return percentage of images that were broken."""
+        if self.processed == 0:
+            return 0.0
+        return (self.moved_to_broken / self.processed) * 100

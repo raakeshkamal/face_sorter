@@ -5,22 +5,23 @@ This module provides a singleton connection manager for MongoDB connections.
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from pymongo import MongoClient
-from pymongo.database import Database
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.database import AsyncIOMotorDatabase
 
 from face_sorter.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-class MongoDBConnection:
-    """Singleton MongoDB connection manager."""
+class AsyncMongoDBConnection:
+    """Singleton async MongoDB connection manager."""
 
-    _instance: Optional["MongoDBConnection"] = None
+    _instance: Optional["AsyncMongoDBConnection"] = None
 
-    def __new__(cls) -> "MongoDBConnection":
+    def __new__(cls) -> "AsyncMongoDBConnection":
         """Ensure only one instance exists."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -29,11 +30,13 @@ class MongoDBConnection:
     def __init__(self) -> None:
         """Initialize the connection manager."""
         if not hasattr(self, "_initialized"):
-            self._client: Optional[MongoClient] = None
-            self._db: Optional[Database] = None
+            self._client: Optional[AsyncIOMotorClient] = None
+            self._db: Optional[AsyncIOMotorDatabase] = None
             self._initialized = True
 
-    def connect(self, uri: Optional[str] = None, database: Optional[str] = None) -> Database:
+    async def connect(
+        self, uri: Optional[str] = None, database: Optional[str] = None
+    ) -> AsyncIOMotorDatabase:
         """
         Connect to MongoDB and return the database instance.
 
@@ -42,7 +45,7 @@ class MongoDBConnection:
             database: Database name. If None, uses settings.
 
         Returns:
-            Database: The MongoDB database instance.
+            AsyncIOMotorDatabase: The MongoDB database instance.
         """
         settings = get_settings()
 
@@ -53,7 +56,12 @@ class MongoDBConnection:
 
         if self._client is None:
             try:
-                self._client = MongoClient(uri)
+                self._client = AsyncIOMotorClient(
+                    uri,
+                    maxPoolSize=100,
+                    minPoolSize=10,
+                    maxIdleTimeMS=30000,
+                )
                 self._db = self._client[database]
                 logger.info(f"Successfully connected to MongoDB: {uri}")
             except Exception as e:
@@ -62,7 +70,7 @@ class MongoDBConnection:
 
         return self._db
 
-    def disconnect(self) -> None:
+    async def disconnect(self) -> None:
         """Close the MongoDB connection."""
         if self._client is not None:
             self._client.close()
@@ -70,36 +78,105 @@ class MongoDBConnection:
             self._db = None
             logger.info("MongoDB connection closed")
 
-    def get_database(self) -> Database:
+    async def get_database(self) -> AsyncIOMotorDatabase:
         """
         Get the database instance without creating a new connection.
 
         Returns:
-            Database: The MongoDB database instance.
+            AsyncIOMotorDatabase: The MongoDB database instance.
         """
         if self._db is None:
-            return self.connect()
+            return await self.connect()
         return self._db
 
-    def get_client(self) -> MongoClient:
+    async def get_client(self) -> AsyncIOMotorClient:
         """
         Get the MongoDB client instance.
 
         Returns:
-            MongoClient: The MongoDB client instance.
+            AsyncIOMotorClient: The MongoDB client instance.
         """
         if self._client is None:
-            self.connect()
+            await self.connect()
         return self._client
 
 
 # Global connection instance
-_connection: Optional[MongoDBConnection] = None
+_connection: Optional[AsyncMongoDBConnection] = None
 
 
-def get_connection() -> MongoDBConnection:
+async def get_connection() -> AsyncMongoDBConnection:
     """
     Get the global MongoDB connection instance.
+
+    Returns:
+        AsyncMongoDBConnection: The connection manager instance.
+    """
+    global _connection
+    if _connection is None:
+        _connection = AsyncMongoDBConnection()
+    return _connection
+
+
+async def get_database() -> AsyncIOMotorDatabase:
+    """
+    Get the MongoDB database instance.
+
+    Returns:
+        AsyncIOMotorDatabase: The MongoDB database instance.
+    """
+    connection = await get_connection()
+    return await connection.get_database()
+
+
+@asynccontextmanager
+async def get_db_context():
+    """
+    Async context manager for database connection.
+
+    Yields:
+        AsyncIOMotorDatabase: The MongoDB database instance.
+    """
+    conn = await get_connection()
+    db = await conn.connect()
+    try:
+        yield db
+    finally:
+        await conn.disconnect()
+
+
+# For backward compatibility, create sync wrappers
+class MongoDBConnection(AsyncMongoDBConnection):
+    """Synchronous wrapper for backward compatibility."""
+
+    def connect(self, uri: Optional[str] = None, database: Optional[str] = None):
+        """Sync wrapper for connect method."""
+        import asyncio
+
+        return asyncio.run(super().connect(uri, database))
+
+    def disconnect(self) -> None:
+        """Sync wrapper for disconnect method."""
+        import asyncio
+
+        return asyncio.run(super().disconnect())
+
+    def get_database(self):
+        """Sync wrapper for get_database method."""
+        import asyncio
+
+        return asyncio.run(super().get_database())
+
+    def get_client(self):
+        """Sync wrapper for get_client method."""
+        import asyncio
+
+        return asyncio.run(super().get_client())
+
+
+def get_connection_sync() -> MongoDBConnection:
+    """
+    Get the global MongoDB connection instance (sync wrapper).
 
     Returns:
         MongoDBConnection: The connection manager instance.
@@ -110,11 +187,11 @@ def get_connection() -> MongoDBConnection:
     return _connection
 
 
-def get_database() -> Database:
+def get_database_sync():
     """
-    Get the MongoDB database instance.
+    Get the MongoDB database instance (sync wrapper).
 
     Returns:
-        Database: The MongoDB database instance.
+        The MongoDB database instance.
     """
-    return get_connection().get_database()
+    return get_connection_sync().get_database()

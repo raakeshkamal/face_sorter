@@ -8,9 +8,10 @@ import logging
 from typing import Any, Optional
 
 import numpy as np
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING
-from pymongo.collection import Collection
-from pymongo.database import Database
+from pymongo.collection import AsyncIOMotorCollection
+from pymongo.database import AsyncIOMotorDatabase
 
 from face_sorter.config import get_settings
 from face_sorter.database.connection import get_database
@@ -21,28 +22,36 @@ logger = logging.getLogger(__name__)
 class FaceRepository:
     """Repository for managing face embeddings."""
 
-    def __init__(self, db: Optional[Database] = None) -> None:
+    def __init__(self, db: Optional[AsyncIOMotorDatabase] = None) -> None:
         """
         Initialize the repository.
 
         Args:
             db: Database instance. If None, uses global connection.
         """
-        if db is None:
-            db = get_database()
-        settings = get_settings()
-        self.collection: Collection = db[settings.collection_backup]
+        self._db: Optional[AsyncIOMotorDatabase] = db
+        self._collection: Optional[AsyncIOMotorCollection] = None
 
-    def insert_face(self, face_data: dict[str, Any]) -> None:
+    async def _get_collection(self) -> AsyncIOMotorCollection:
+        """Get the collection lazily."""
+        if self._collection is None:
+            if self._db is None:
+                self._db = await get_database()
+            settings = get_settings()
+            self._collection = self._db[settings.collection_backup]
+        return self._collection
+
+    async def insert_face(self, face_data: dict[str, Any]) -> None:
         """
         Insert a face embedding into the database.
 
         Args:
             face_data: Dictionary containing face information.
         """
-        self.collection.insert_one(face_data)
+        collection = await self._get_collection()
+        await collection.insert_one(face_data)
 
-    def get_all_faces(
+    async def get_all_faces(
         self,
         projection: Optional[dict[str, Any]] = None,
         sort: Optional[list[tuple[str, int]]] = None,
@@ -62,34 +71,44 @@ class FaceRepository:
         if sort is None:
             sort = [("idx", ASCENDING)]
 
-        return list(self.collection.find(projection=projection).sort(sort))
+        collection = await self._get_collection()
+        cursor = collection.find(projection=projection).sort(sort)
+        return [doc async for doc in cursor]
 
-    def count_faces(self) -> int:
+    async def count_faces(self) -> int:
         """
         Count the number of faces in the collection.
 
         Returns:
             Number of faces.
         """
-        return self.collection.count_documents({})
+        collection = await self._get_collection()
+        return await collection.count_documents({})
 
 
 class ClassRepository:
     """Repository for managing face classes."""
 
-    def __init__(self, db: Optional[Database] = None) -> None:
+    def __init__(self, db: Optional[AsyncIOMotorDatabase] = None) -> None:
         """
         Initialize the repository.
 
         Args:
             db: Database instance. If None, uses global connection.
         """
-        if db is None:
-            db = get_database()
-        settings = get_settings()
-        self.collection: Collection = db[settings.collection_classes]
+        self._db: Optional[AsyncIOMotorDatabase] = db
+        self._collection: Optional[AsyncIOMotorCollection] = None
 
-    def insert_class(self, class_name: str, embedding: list[float]) -> None:
+    async def _get_collection(self) -> AsyncIOMotorCollection:
+        """Get the collection lazily."""
+        if self._collection is None:
+            if self._db is None:
+                self._db = await get_database()
+            settings = get_settings()
+            self._collection = self._db[settings.collection_classes]
+        return self._collection
+
+    async def insert_class(self, class_name: str, embedding: list[float]) -> None:
         """
         Insert a face class into the database.
 
@@ -97,10 +116,11 @@ class ClassRepository:
             class_name: Name of the class.
             embedding: Face embedding vector.
         """
+        collection = await self._get_collection()
         class_entry = {"class": class_name, "embed": embedding}
-        self.collection.insert_one(class_entry)
+        await collection.insert_one(class_entry)
 
-    def get_all_classes(
+    async def get_all_classes(
         self, projection: Optional[dict[str, Any]] = None
     ) -> list[dict[str, Any]]:
         """
@@ -114,9 +134,11 @@ class ClassRepository:
         """
         if projection is None:
             projection = {}
-        return list(self.collection.find(projection=projection))
+        collection = await self._get_collection()
+        cursor = collection.find(projection=projection)
+        return [doc async for doc in cursor]
 
-    def get_class_embeddings(
+    async def get_class_embeddings(
         self,
     ) -> tuple[list[str], list[list[float]], list[str], list[np.ndarray]]:
         """
@@ -125,7 +147,7 @@ class ClassRepository:
         Returns:
             Tuple of (class_names, embeddings, distinct_classes, mean_embeddings).
         """
-        class_docs = self.get_all_classes(projection={"class": 1, "embed": 1, "_id": 0})
+        class_docs = await self.get_all_classes(projection={"class": 1, "embed": 1, "_id": 0})
 
         refname = [doc["class"] for doc in class_docs]
         refembeddings = [doc["embed"] for doc in class_docs]
@@ -155,41 +177,50 @@ class ClassRepository:
 
         return refname, refembeddings, distinct_classes, classembeddings
 
-    def delete_class(self, class_name: str) -> None:
+    async def delete_class(self, class_name: str) -> None:
         """
         Delete a class from the database.
 
         Args:
             class_name: Name of the class to delete.
         """
-        self.collection.delete_one({"class": class_name})
+        collection = await self._get_collection()
+        await collection.delete_one({"class": class_name})
 
-    def get_all_class_names(self) -> list[str]:
+    async def get_all_class_names(self) -> list[str]:
         """
         Get all class names.
 
         Returns:
             List of class names.
         """
-        return [doc["class"] for doc in self.get_all_classes(projection={"class": 1, "_id": 0})]
+        class_docs = await self.get_all_classes(projection={"class": 1, "_id": 0})
+        return [doc["class"] for doc in class_docs]
 
 
 class ClusterRepository:
     """Repository for managing face clusters."""
 
-    def __init__(self, db: Optional[Database] = None) -> None:
+    def __init__(self, db: Optional[AsyncIOMotorDatabase] = None) -> None:
         """
         Initialize the repository.
 
         Args:
             db: Database instance. If None, uses global connection.
         """
-        if db is None:
-            db = get_database()
-        settings = get_settings()
-        self.collection: Collection = db[settings.collection_clusters]
+        self._db: Optional[AsyncIOMotorDatabase] = db
+        self._collection: Optional[AsyncIOMotorCollection] = None
 
-    def insert_cluster(
+    async def _get_collection(self) -> AsyncIOMotorCollection:
+        """Get the collection lazily."""
+        if self._collection is None:
+            if self._db is None:
+                self._db = await get_database()
+            settings = get_settings()
+            self._collection = self._db[settings.collection_clusters]
+        return self._collection
+
+    async def insert_cluster(
         self,
         cluster_name: int,
         cluster_id: int,
@@ -205,15 +236,16 @@ class ClusterRepository:
             indices: List of image indices in the cluster.
             centroid: Cluster centroid embedding.
         """
+        collection = await self._get_collection()
         cluster_info = {
             "cluster_name": cluster_name,
             "cluster_id": cluster_id,
             "indices": indices,
             "centroid": centroid,
         }
-        self.collection.insert_one(cluster_info)
+        await collection.insert_one(cluster_info)
 
-    def get_cluster(self, cluster_id: int) -> Optional[dict[str, Any]]:
+    async def get_cluster(self, cluster_id: int) -> Optional[dict[str, Any]]:
         """
         Get a cluster by ID.
 
@@ -223,13 +255,15 @@ class ClusterRepository:
         Returns:
             Cluster document or None if not found.
         """
-        return self.collection.find_one({"cluster_id": cluster_id})
+        collection = await self._get_collection()
+        return await collection.find_one({"cluster_id": cluster_id})
 
-    def clear_clusters(self) -> None:
+    async def clear_clusters(self) -> None:
         """Remove all clusters from the collection."""
-        self.collection.drop()
+        collection = await self._get_collection()
+        await collection.drop()
 
-    def get_all_clusters(
+    async def get_all_clusters(
         self, projection: Optional[dict[str, Any]] = None
     ) -> list[dict[str, Any]]:
         """
@@ -243,11 +277,13 @@ class ClusterRepository:
         """
         if projection is None:
             projection = {}
-        return list(self.collection.find(projection=projection))
+        collection = await self._get_collection()
+        cursor = collection.find(projection=projection)
+        return [doc async for doc in cursor]
 
 
-def fetch_data_optimized(
-    db: Optional[Database] = None,
+async def fetch_data_optimized(
+    db: Optional[AsyncIOMotorDatabase] = None,
 ) -> tuple[
     list[str],
     list[list[float]],
@@ -286,10 +322,10 @@ def fetch_data_optimized(
         refembeddings,
         classname,
         classembeddings,
-    ) = class_repo.get_class_embeddings()
+    ) = await class_repo.get_class_embeddings()
 
     # Fetch face data
-    face_docs = face_repo.get_all_faces(
+    face_docs = await face_repo.get_all_faces(
         projection={
             "item": 1,
             "path": 1,
@@ -301,7 +337,7 @@ def fetch_data_optimized(
         sort=[("idx", ASCENDING)],
     )
 
-    count = face_repo.count_faces()
+    count = await face_repo.count_faces()
     imgname = [None] * count
     imgpath = [None] * count
     imgcache = [None] * count

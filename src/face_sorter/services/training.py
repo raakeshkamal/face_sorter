@@ -5,10 +5,10 @@ This module handles the training process: detecting faces in images and generati
 face embeddings using InsightFace.
 """
 
+import asyncio
 import logging
 import os
 import random
-import shutil
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,6 +19,12 @@ from insightface.app import FaceAnalysis
 from face_sorter.config import get_settings
 from face_sorter.database.repositories import FaceRepository
 from face_sorter.models.face import FaceEmbedding, TrainingProgress
+from face_sorter.utils.file_async import (
+    async_file_exists,
+    async_list_files,
+    async_move_file,
+    async_makedirs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +41,7 @@ def get_process_memory() -> float:
     return memory_info.rss / (1024 * 1024)
 
 
-def generate_embeddings(
+async def generate_embeddings(
     app: FaceAnalysis, img_path: str, noface_dir: Optional[str] = None
 ) -> list[Any]:
     """
@@ -43,73 +49,106 @@ def generate_embeddings(
 
     Args:
         app: InsightFace FaceAnalysis instance.
-        img_path: Path to the image file.
+        img_path: Path to image file.
+        noface_dir: Directory to move images without faces (optional, unused).
+
+    Returns:
+        List of face objects from InsightFace.
+    """
+    """
+    Generate face embeddings for an image.
+
+    Args:
+        app: InsightFace FaceAnalysis instance.
+        img_path: Path to image file.
         noface_dir: Directory to move images without faces (optional).
 
     Returns:
         List of face objects from InsightFace.
     """
     try:
-        img = cv2.imread(img_path)
+        # cv2 doesn't have async support, use thread pool
+        img = await asyncio.to_thread(cv2.imread, img_path)
         if img is None:
             logger.warning(f"Failed to read image: {img_path}")
             return []
 
-        faces = app.get(img)
+        # InsightFace operations are blocking, use thread pool
+        faces = await asyncio.to_thread(app.get, img)
         return faces
     except Exception as e:
         logger.error(f"Error processing {img_path}: {e}")
         return []
 
 
-def get_file_list_filtered_and_sorted(
-    bkp_collection: Any, src_dir: str
+async def get_file_list_filtered_and_sorted(
+    bkpcollection: Any, src_dir: str, duplicates_path: Optional[Path] = None
 ) -> list[str]:
     """
     Get a filtered and sorted list of image files.
 
     Args:
-        bkp_collection: MongoDB collection containing processed images.
+        bkpcollection: MongoDB collection containing processed images.
         src_dir: Source directory to scan.
+        duplicates_path: Path to duplicates directory (will be skipped).
 
     Returns:
         List of image filenames.
     """
     src_path = Path(src_dir)
 
-    # Get all JPG files
-    sort_list = [
-        f for f in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, f)) and f.lower().endswith(".jpg")
-    ]
+    # Get all JPG files (async list files)
+    all_files = await async_list_files(src_dir, "*.jpg")
+    all_files.extend(await async_list_files(src_dir, "*.JPG"))
 
     # Sort by file size
-    sort_list = sorted(sort_list, key=lambda x: os.stat(os.path.join(src_dir, x)).st_size)
+    sort_list = sorted(all_files, key=lambda x: Path(x).stat().st_size)
+    # Extract just filenames
+    sort_list = [Path(f).name for f in sort_list]
 
     # Remove already processed images
-    for img in bkp_collection.find():
-        if img["item"] in sort_list:
-            sort_list.remove(img["item"])
+    processed_items = set()
+    async for img in bkpcollection.find():
+        if "item" in img:
+            processed_items.add(img["item"])
+
+    sort_list = [f for f in sort_list if f not in processed_items]
+
+    # Remove files in duplicates directory
+    if duplicates_path:
+        duplicates_set = set()
+        try:
+            # Get all files in duplicates directory
+            duplicates_files = await async_list_files(str(duplicates_path), "*.jpg")
+            duplicates_files.extend(await async_list_files(str(duplicates_path), "*.JPG"))
+            duplicates_set = {Path(f).name for f in duplicates_files}
+        except Exception as e:
+            logger.warning(f"Could not read duplicates directory: {e}")
+
+        sort_list = [f for f in sort_list if f not in duplicates_set]
 
     return sort_list
 
 
-def train(
+async def train(
     source_dir: Optional[str] = None,
     noface_dir: Optional[str] = None,
     broken_dir: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    duplicates_dir: Optional[str] = None,
 ) -> TrainingProgress:
     """
-    Train the model by detecting faces and generating embeddings.
+    Train model by detecting faces and generating embeddings.
 
     Args:
         source_dir: Directory containing images to process.
         noface_dir: Directory for images without faces.
         broken_dir: Directory for corrupted images.
         cache_dir: Directory for cache.
+        duplicates_dir: Directory for duplicate images (will be skipped).
 
     Returns:
-        TrainingProgress: Information about the training progress.
+        TrainingProgress: Information about training progress.
     """
     settings = get_settings()
 
@@ -122,12 +161,15 @@ def train(
         broken_dir = settings.broken_dir
     if cache_dir is None:
         cache_dir = settings.cache_dir
+    if duplicates_dir is None:
+        duplicates_dir = settings.duplicates_dir
 
     src_dir = Path(source_dir)
+    duplicates_path = Path(duplicates_dir) if duplicates_dir else None
 
     # Ensure output directories exist
-    os.makedirs(noface_dir, exist_ok=True)
-    os.makedirs(broken_dir, exist_ok=True)
+    await async_makedirs(noface_dir, exist_ok=True)
+    await async_makedirs(broken_dir, exist_ok=True)
 
     # Initialize face detection model
     logger.info("Initializing InsightFace model...")
@@ -136,11 +178,11 @@ def train(
 
     # Get database connection
     face_repo = FaceRepository()
-    bkpcollection = face_repo.collection
+    bkpcollection = await face_repo._get_collection()
 
     # Get file list
     logger.info("Loading image database...")
-    file_list = get_file_list_filtered_and_sorted(bkpcollection, source_dir)
+    file_list = await get_file_list_filtered_and_sorted(bkpcollection, source_dir, duplicates_path)
     random.shuffle(file_list)
 
     total_files = len(file_list)
@@ -153,17 +195,17 @@ def train(
     for i, item in enumerate(file_list, 1):
         item_path = src_dir.joinpath(item)
 
-        if not os.path.exists(item_path):
+        if not await async_file_exists(str(item_path)):
             logger.warning(f"File not found, skipping: {item_path}")
             continue
 
         logger.info(f"Processing {i}/{total_files}: {item}")
-        faces = generate_embeddings(app, str(item_path), noface_dir)
+        faces = await generate_embeddings(app, str(item_path), noface_dir)
 
         if len(faces) == 0:
             logger.info(f"No face found, moving to noface directory: {item}")
             try:
-                shutil.move(str(item_path), noface_dir)
+                await async_move_file(str(item_path), noface_dir)
                 without_faces += 1
             except Exception as e:
                 logger.error(f"Error moving file to noface directory: {e}")
@@ -172,9 +214,10 @@ def train(
         with_faces += 1
 
         # Save face embeddings
+        count = await face_repo.count_faces()
         for face in faces:
             face_data = FaceEmbedding(
-                idx=bkpcollection.count_documents({}),
+                idx=count,
                 item=item,
                 path=str(item_path),
                 age=face.age,
@@ -188,7 +231,8 @@ def train(
                 embedding=face.embedding.tolist(),
                 cache_url=os.path.join(cache_dir, item),
             )
-            face_repo.insert_face(face_data.to_dict())
+            await face_repo.insert_face(face_data.to_dict())
+            count += 1
 
         # Log memory usage periodically
         if i % 10 == 0:
@@ -203,3 +247,27 @@ def train(
         with_faces=with_faces,
         without_faces=without_faces,
     )
+
+
+# Synchronous wrappers for backward compatibility
+def train_sync(
+    source_dir: Optional[str] = None,
+    noface_dir: Optional[str] = None,
+    broken_dir: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    duplicates_dir: Optional[str] = None,
+) -> TrainingProgress:
+    """
+    Synchronous wrapper for train function.
+
+    Args:
+        source_dir: Directory containing images to process.
+        noface_dir: Directory for images without faces.
+        broken_dir: Directory for corrupted images.
+        cache_dir: Directory for cache.
+        duplicates_dir: Directory for duplicate images (will be skipped).
+
+    Returns:
+        TrainingProgress: Information about training progress.
+    """
+    return asyncio.run(train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir))
