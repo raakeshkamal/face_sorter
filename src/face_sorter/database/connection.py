@@ -8,8 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.database import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from face_sorter.config import get_settings
 

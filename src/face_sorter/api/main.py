@@ -55,7 +55,7 @@ app.add_middleware(
 )
 
 # Mount static files for frontend
-static_dir = Path(__file__).parent / "web" / "frontend" / "dist"
+static_dir = Path(__file__).parent.parent / "web" / "frontend" / "dist"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="frontend")
 else:
@@ -64,7 +64,7 @@ else:
 # Serve images from cache directory
 cache_dir = Path(settings.cache_dir)
 if cache_dir.exists():
-    app.mount("/images", StaticFiles(directory=str(cache_dir), name="images"))
+    app.mount("/images", StaticFiles(directory=str(cache_dir)), name="images")
 else:
     print(f"Warning: Cache directory not found: {cache_dir}")
 

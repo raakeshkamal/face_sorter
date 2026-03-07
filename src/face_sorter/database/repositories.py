@@ -8,10 +8,8 @@ import logging
 from typing import Any, Optional
 
 import numpy as np
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo import ASCENDING
-from pymongo.collection import AsyncIOMotorCollection
-from pymongo.database import AsyncIOMotorDatabase
 
 from face_sorter.config import get_settings
 from face_sorter.database.connection import get_database
