@@ -59,6 +59,13 @@ export const apiService = {
     const response = await api.post("/operations/clean", data);
     return response.data;
   },
+
+  // Filesystem
+  async browseDirectories(path = "") {
+    const params = path ? { path } : {};
+    const response = await api.get("/filesystem/browse", { params });
+    return response.data;
+  },
 };
 
 export default api;

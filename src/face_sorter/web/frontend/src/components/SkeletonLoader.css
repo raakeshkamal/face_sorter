@@ -1,66 +1,3 @@
-<template>
-  <div class="skeleton-container">
-    <div v-if="type === 'card'" class="skeleton-card">
-      <div class="skeleton-header">
-        <div class="skeleton-title skeleton-shimmer"></div>
-      </div>
-      <div class="skeleton-body">
-        <div class="skeleton-line skeleton-shimmer"></div>
-        <div class="skeleton-line skeleton-shimmer"></div>
-      </div>
-    </div>
-
-    <div v-else-if="type === 'gallery'" class="skeleton-gallery grid-4">
-      <div v-for="i in count" :key="i" class="skeleton-image-card skeleton-shimmer"></div>
-    </div>
-
-    <div v-else-if="type === 'stats'" class="skeleton-stats grid-4">
-      <div v-for="i in 4" :key="i" class="skeleton-stat-card skeleton-shimmer">
-        <div class="skeleton-stat-icon"></div>
-        <div class="skeleton-stat-value skeleton-shimmer"></div>
-      </div>
-    </div>
-
-    <div v-else-if="type === 'list'" class="skeleton-list">
-      <div v-for="i in count" :key="i" class="skeleton-list-item">
-        <div class="skeleton-avatar skeleton-shimmer"></div>
-        <div class="skeleton-item-content">
-          <div class="skeleton-item-title skeleton-shimmer"></div>
-          <div class="skeleton-item-meta skeleton-shimmer"></div>
-        </div>
-      </div>
-    </div>
-
-    <div v-else-if="type === 'text'" class="skeleton-text">
-      <div class="skeleton-text-line skeleton-shimmer"></div>
-      <div class="skeleton-text-line skeleton-shimmer short"></div>
-      <div class="skeleton-text-line skeleton-shimmer medium"></div>
-    </div>
-
-    <div v-else class="skeleton-default">
-      <div class="skeleton-block skeleton-shimmer"></div>
-    </div>
-  </div>
-</template>
-
-<script setup>
-defineProps({
-  type: {
-    type: String,
-    default: "default", // card, gallery, stats, list, text, default
-    validator: (value) => {
-      const validTypes = ["card", "gallery", "stats", "list", "text", "default"];
-      return validTypes.includes(value);
-    },
-  },
-  count: {
-    type: Number,
-    default: 4,
-  },
-});
-</script>
-
-<style scoped>
 .skeleton-container {
   padding: 20px 0;
 }
@@ -235,4 +172,3 @@ defineProps({
     padding: 20px;
   }
 }
-</style>

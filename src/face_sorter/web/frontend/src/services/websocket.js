@@ -8,35 +8,45 @@ class WebSocketService {
 
   connect(operationType, taskId, onMessage, onError) {
     const wsUrl = `ws://127.0.0.1:8000/api/operations/ws/${operationType}/${taskId}`;
-    console.log(`Connecting to WebSocket: ${wsUrl}`);
+    console.log(`[WebSocketService] Connecting to WebSocket: ${wsUrl}`);
+    console.log(`[WebSocketService] operationType: ${operationType}, taskId: ${taskId}`);
 
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
-      console.log("WebSocket connected");
+      console.log("[WebSocketService] WebSocket connected successfully");
       this.reconnectAttempts = 0;
     };
 
     this.ws.onmessage = (event) => {
+      console.log("[WebSocketService] Received raw message:", event.data);
       try {
         const data = JSON.parse(event.data);
+        console.log("[WebSocketService] Parsed message:", data);
         if (onMessage) {
+          console.log("[WebSocketService] Calling onMessage callback");
           onMessage(data);
+          console.log("[WebSocketService] onMessage callback completed");
+        } else {
+          console.warn("[WebSocketService] No onMessage callback provided");
         }
       } catch (error) {
-        console.error("Error parsing WebSocket message:", error);
+        console.error("[WebSocketService] Error parsing WebSocket message:", error);
+        console.error("[WebSocketService] Raw message that failed to parse:", event.data);
       }
     };
 
     this.ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
+      console.error("[WebSocketService] WebSocket error:", error);
+      console.error("[WebSocketService] Error details:", JSON.stringify(error));
       if (onError) {
         onError(error);
       }
     };
 
-    this.ws.onclose = () => {
-      console.log("WebSocket closed");
+    this.ws.onclose = (event) => {
+      console.log("[WebSocketService] WebSocket closed");
+      console.log("[WebSocketService] Close code:", event.code, "reason:", event.reason);
       this.reconnect();
     };
   }

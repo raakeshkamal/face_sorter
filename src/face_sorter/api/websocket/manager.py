@@ -60,17 +60,21 @@ class ConnectionManager:
             message: Message to broadcast (will be JSON encoded)
         """
         key = f"{operation_type}:{task_id}"
+        print(f"DEBUG(WebSocket): Broadcasting to key={key}. Active connections map keys: {list(self.active_connections.keys())}")
         if key in self.active_connections:
             disconnected = []
             for connection in self.active_connections[key]:
                 try:
                     await connection.send_json(message)
-                except Exception:
+                except Exception as e:
+                    print(f"DEBUG(WebSocket): Error sending message: {e}")
                     disconnected.append(connection)
 
             # Clean up disconnected connections
             for connection in disconnected:
                 self.disconnect(connection, operation_type, task_id)
+        else:
+            print(f"DEBUG(WebSocket): No active connections found for key={key}")
 
     async def send_progress(
         self,
@@ -105,6 +109,7 @@ class ConnectionManager:
                 "current_item": current_item,
             },
         }
+        print(f"DEBUG(WebSocket): send_progress called for {operation_type}:{task_id} -> {current}/{total}")
         await self.broadcast(operation_type, task_id, message)
 
     async def send_complete(

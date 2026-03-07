@@ -205,10 +205,13 @@ async def train(
         logger.info(f"Processing {i}/{total_files}: {item}")
         faces = await generate_embeddings(app, str(item_path), noface_dir)
 
-        # Report progress every 10 images
-        if progress_callback and i % 10 == 0:
+        # Report progress
+        if progress_callback and (i == 1 or i % 10 == 0 or i == total_files):
             status = "Processing images" if i < total_files else "Complete"
             progress_callback(i, total_files, status, item)
+            
+            # Explicitly yield to the event loop to ensure WebSockets flush
+            await asyncio.sleep(0.01)
 
         if len(faces) == 0:
             logger.info(f"No face found, moving to noface directory: {item}")

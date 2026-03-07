@@ -54,6 +54,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include API routes BEFORE static file mounts to avoid shadowing
+app.include_router(api_router, prefix="/api")
+
 # Mount static files for frontend
 static_dir = Path(__file__).parent.parent / "web" / "frontend" / "dist"
 if static_dir.exists():
@@ -67,9 +70,6 @@ if cache_dir.exists():
     app.mount("/images", StaticFiles(directory=str(cache_dir)), name="images")
 else:
     print(f"Warning: Cache directory not found: {cache_dir}")
-
-# Include API routes
-app.include_router(api_router, prefix="/api")
 
 
 @app.get("/health")

@@ -136,6 +136,32 @@ async def async_list_files(
         return []
 
 
+async def async_list_directories(path: str) -> list[str]:
+    """
+    Asynchronously list directories in a directory.
+
+    Args:
+        path: Directory path.
+
+    Returns:
+        List of directory paths.
+    """
+    try:
+        dir_path = Path(path)
+        if not dir_path.exists():
+            raise FileNotFoundError(f"Directory not found: {path}")
+        if not dir_path.is_dir():
+            raise NotADirectoryError(f"Not a directory: {path}")
+
+        # List directories only
+        items = await asyncio.to_thread(list, dir_path.iterdir())
+        directories = [str(d) for d in items if d.is_dir()]
+        return sorted(directories)
+    except Exception as e:
+        logger.error(f"Error listing directories in {path}: {e}")
+        raise
+
+
 async def async_file_exists(path: str) -> bool:
     """
     Asynchronously check if a file exists.

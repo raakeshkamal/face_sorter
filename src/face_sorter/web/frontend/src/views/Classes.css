@@ -1,0 +1,94 @@
+.classes-view {
+  animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.view-header {
+  margin-bottom: 30px;
+}
+
+.view-header h1 {
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--secondary-color);
+  margin: 0 0 10px 0;
+}
+
+.subtitle {
+  font-size: 18px;
+  color: #666;
+  margin: 0;
+}
+
+.no-classes {
+  text-align: center;
+  padding: 60px 20px;
+  color: #999;
+}
+
+.no-classes-icon {
+  font-size: 64px;
+  display: block;
+  margin-bottom: 20px;
+}
+
+.no-classes-text {
+  font-size: 20px;
+  margin: 0 0 10px 0;
+}
+
+.no-classes-hint {
+  font-size: 16px;
+  margin: 0;
+}
+
+.class-card {
+  text-align: center;
+  padding: 30px 20px;
+  transition: all 0.3s ease;
+}
+
+.class-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+}
+
+.class-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.class-icon {
+  font-size: 32px;
+}
+
+.class-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary-color);
+  margin: 0;
+}
+
+.class-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  font-size: 14px;
+}
