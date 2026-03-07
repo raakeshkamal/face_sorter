@@ -118,6 +118,26 @@ class Settings(BaseSettings):
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
+    # UI Configuration
+    ui_host: str = Field(
+        default="127.0.0.1",
+        description="UI server host",
+    )
+    ui_port: int = Field(
+        default=8000,
+        ge=1024,
+        le=65535,
+        description="UI server port",
+    )
+    ui_reload: bool = Field(
+        default=True,
+        description="Enable auto-reload for development",
+    )
+    ui_log_level: str = Field(
+        default="info",
+        description="UI server log level (debug, info, warning, error, critical)",
+    )
+
     # Dataset Cleaning Settings
     clean_output_dir: str = Field(
         default="/Volumes/data_sets/fresh_backup/cleaned",

@@ -10,7 +10,7 @@ import logging
 import os
 import random
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import cv2
 import psutil
@@ -136,6 +136,7 @@ async def train(
     broken_dir: Optional[str] = None,
     cache_dir: Optional[str] = None,
     duplicates_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
 ) -> TrainingProgress:
     """
     Train model by detecting faces and generating embeddings.
@@ -146,6 +147,8 @@ async def train(
         broken_dir: Directory for corrupted images.
         cache_dir: Directory for cache.
         duplicates_dir: Directory for duplicate images (will be skipped).
+        progress_callback: Optional callback function(current, total, status, current_item)
+                        for reporting progress during training.
 
     Returns:
         TrainingProgress: Information about training progress.
@@ -202,6 +205,11 @@ async def train(
         logger.info(f"Processing {i}/{total_files}: {item}")
         faces = await generate_embeddings(app, str(item_path), noface_dir)
 
+        # Report progress every 10 images
+        if progress_callback and i % 10 == 0:
+            status = "Processing images" if i < total_files else "Complete"
+            progress_callback(i, total_files, status, item)
+
         if len(faces) == 0:
             logger.info(f"No face found, moving to noface directory: {item}")
             try:
@@ -240,6 +248,10 @@ async def train(
 
     logger.info(f"Training complete. Processed {i} images")
     logger.info(f"With faces: {with_faces}, Without faces: {without_faces}")
+
+    # Report final progress
+    if progress_callback:
+        progress_callback(i, total_files, "Complete", "")
 
     return TrainingProgress(
         processed=with_faces + without_faces,

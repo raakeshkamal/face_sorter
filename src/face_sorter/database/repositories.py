@@ -85,6 +85,53 @@ class FaceRepository:
         collection = await self._get_collection()
         return await collection.count_documents({})
 
+    async def get_face_by_idx(self, idx: int) -> Optional[dict[str, Any]]:
+        """
+        Get a single face by index.
+
+        Args:
+            idx: Index of the face.
+
+        Returns:
+            Face document or None if not found.
+        """
+        collection = await self._get_collection()
+        return await collection.find_one({"idx": idx})
+
+    async def get_faces_paginated(
+        self,
+        query: Optional[dict[str, Any]] = None,
+        projection: Optional[dict[str, Any]] = None,
+        skip: int = 0,
+        limit: int = 100,
+        sort: Optional[list[tuple[str, int]]] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Get paginated faces from database.
+
+        Args:
+            query: MongoDB query filter.
+            projection: Fields to include/exclude.
+            skip: Number of documents to skip.
+            limit: Number of documents to return.
+            sort: Sort specification.
+
+        Returns:
+            List of face documents.
+        """
+        if query is None:
+            query = {}
+        if projection is None:
+            projection = {}
+        if sort is None:
+            sort = [("idx", ASCENDING)]
+
+        collection = await self._get_collection()
+        cursor = (
+            collection.find(query, projection=projection).sort(sort).skip(skip).limit(limit)
+        )
+        return [doc async for doc in cursor]
+
 
 class ClassRepository:
     """Repository for managing face classes."""
@@ -197,6 +244,16 @@ class ClassRepository:
         class_docs = await self.get_all_classes(projection={"class": 1, "_id": 0})
         return [doc["class"] for doc in class_docs]
 
+    async def count_classes(self) -> int:
+        """
+        Count the number of classes in the collection.
+
+        Returns:
+            Number of classes.
+        """
+        collection = await self._get_collection()
+        return await collection.count_documents({})
+
 
 class ClusterRepository:
     """Repository for managing face clusters."""
@@ -280,6 +337,16 @@ class ClusterRepository:
         collection = await self._get_collection()
         cursor = collection.find(projection=projection)
         return [doc async for doc in cursor]
+
+    async def count_clusters(self) -> int:
+        """
+        Count the number of clusters in the collection.
+
+        Returns:
+            Number of clusters.
+        """
+        collection = await self._get_collection()
+        return await collection.count_documents({})
 
 
 async def fetch_data_optimized(

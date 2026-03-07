@@ -8,6 +8,7 @@ import logging
 
 import click
 
+from face_sorter.cli_web import web
 from face_sorter.config import get_settings
 from face_sorter.services.caching import build_cache_sync
 from face_sorter.services.clean import clean_dataset_sync
@@ -204,6 +205,7 @@ def list_classes():
 cli.add_command(add_class, name="add-class")
 cli.add_command(remove, name="remove-class")
 cli.add_command(sort_faces, name="sort")
+cli.add_command(web)
 
 
 if __name__ == "__main__":

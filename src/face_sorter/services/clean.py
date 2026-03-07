@@ -8,7 +8,7 @@ by converting all images to RGB JPEG format with sequential naming.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PIL import ImageFile
 
@@ -226,6 +226,7 @@ async def clean_dataset(
     quality: Optional[int] = None,
     recursive: Optional[bool] = None,
     start_index: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
 ) -> CleanResult:
     """
     Clean and standardize an image dataset.
@@ -246,6 +247,8 @@ async def clean_dataset(
         quality: JPEG quality (1-100).
         recursive: Whether to scan recursively.
         start_index: Starting index for sequential naming.
+        progress_callback: Optional callback function(current, total, status, current_item)
+                        for reporting progress during cleaning.
 
     Returns:
         CleanResult with statistics about cleaning operation.
@@ -340,6 +343,10 @@ async def clean_dataset(
                 f"Progress: {processed}/{total} images processed "
                 f"({successful} successful, {failed} failed)"
             )
+            # Report progress via callback
+            if progress_callback:
+                status = "Processing" if processed < total else "Complete"
+                progress_callback(processed, total, status, f"batch_{batch_num}")
 
     end_index = current_index - 1
 
@@ -353,6 +360,10 @@ async def clean_dataset(
         f"  Output range: {img_prefix}_{start_index:04d}.jpg "
         f"to {img_prefix}_{end_index:04d}.jpg"
     )
+
+    # Report final progress
+    if progress_callback:
+        progress_callback(processed, total, "Complete", "")
 
     return CleanResult(
         processed=processed,
