@@ -60,6 +60,22 @@ export const apiService = {
     return response.data;
   },
 
+  // Sessions
+  async getActiveSessions() {
+    const response = await api.get("/operations/sessions/active");
+    return response.data;
+  },
+
+  async getSession(taskId) {
+    const response = await api.get(`/operations/sessions/${taskId}`);
+    return response.data;
+  },
+
+  async cancelSession(taskId) {
+    const response = await api.post(`/operations/sessions/${taskId}/cancel`);
+    return response.data;
+  },
+
   // Filesystem
   async browseDirectories(path = "") {
     const params = path ? { path } : {};

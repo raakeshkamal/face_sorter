@@ -227,6 +227,7 @@ async def clean_dataset(
     recursive: Optional[bool] = None,
     start_index: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> CleanResult:
     """
     Clean and standardize an image dataset.
@@ -249,9 +250,13 @@ async def clean_dataset(
         start_index: Starting index for sequential naming.
         progress_callback: Optional callback function(current, total, status, current_item)
                         for reporting progress during cleaning.
+        cancellation_event: Optional asyncio.Event that, when set, signals cancellation.
 
     Returns:
         CleanResult with statistics about cleaning operation.
+
+    Raises:
+        asyncio.CancelledError: If cancellation_event is set during cleaning.
     """
     settings = get_settings()
 
@@ -315,6 +320,11 @@ async def clean_dataset(
     processed = 0
 
     for i in range(0, total, batch_size):
+        # Check for cancellation before processing each batch
+        if cancellation_event and cancellation_event.is_set():
+            logger.info("Cleaning cancelled by user")
+            raise asyncio.CancelledError("Cleaning was cancelled by user")
+
         batch = image_files[i : i + batch_size]
         batch_start_index = current_index
 

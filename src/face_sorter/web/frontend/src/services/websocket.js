@@ -4,9 +4,20 @@ class WebSocketService {
     this.ws = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
+    // Store connection parameters for reconnection
+    this.operationType = null;
+    this.taskId = null;
+    this.onMessage = null;
+    this.onError = null;
   }
 
   connect(operationType, taskId, onMessage, onError) {
+    // Store connection parameters for reconnection
+    this.operationType = operationType;
+    this.taskId = taskId;
+    this.onMessage = onMessage;
+    this.onError = onError;
+
     const wsUrl = `ws://127.0.0.1:8000/api/operations/ws/${operationType}/${taskId}`;
     console.log(`[WebSocketService] Connecting to WebSocket: ${wsUrl}`);
     console.log(`[WebSocketService] operationType: ${operationType}, taskId: ${taskId}`);
@@ -52,11 +63,11 @@ class WebSocketService {
   }
 
   reconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+    if (this.reconnectAttempts < this.maxReconnectAttempts && this.taskId) {
       this.reconnectAttempts++;
       console.log(`Reconnecting... attempt ${this.reconnectAttempts}`);
       setTimeout(() => {
-        // Reconnection would be handled by the calling component
+        this.connect(this.operationType, this.taskId, this.onMessage, this.onError);
       }, 1000 * this.reconnectAttempts);
     }
   }
@@ -66,6 +77,12 @@ class WebSocketService {
       this.ws.close();
       this.ws = null;
     }
+    // Reset connection parameters
+    this.operationType = null;
+    this.taskId = null;
+    this.onMessage = null;
+    this.onError = null;
+    this.reconnectAttempts = 0;
   }
 
   isConnected() {

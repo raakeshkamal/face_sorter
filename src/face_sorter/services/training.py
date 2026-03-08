@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import random
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -19,6 +20,7 @@ from insightface.app import FaceAnalysis
 from face_sorter.config import get_settings
 from face_sorter.database.repositories import FaceRepository
 from face_sorter.models.face import FaceEmbedding, TrainingProgress
+from face_sorter.models.session import TrainingCancelledError
 from face_sorter.utils.file_async import (
     async_file_exists,
     async_list_files,
@@ -137,6 +139,7 @@ async def train(
     cache_dir: Optional[str] = None,
     duplicates_dir: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> TrainingProgress:
     """
     Train model by detecting faces and generating embeddings.
@@ -149,9 +152,13 @@ async def train(
         duplicates_dir: Directory for duplicate images (will be skipped).
         progress_callback: Optional callback function(current, total, status, current_item)
                         for reporting progress during training.
+        cancellation_event: Optional asyncio.Event that, when set, signals cancellation.
 
     Returns:
         TrainingProgress: Information about training progress.
+
+    Raises:
+        TrainingCancelledError: If cancellation_event is set during training.
     """
     settings = get_settings()
 
@@ -169,6 +176,10 @@ async def train(
 
     src_dir = Path(source_dir)
     duplicates_path = Path(duplicates_dir) if duplicates_dir else None
+
+    # Check for cancellation before starting expensive operations
+    if cancellation_event and cancellation_event.is_set():
+        raise TrainingCancelledError("Training was cancelled before initialization")
 
     # Ensure output directories exist
     await async_makedirs(noface_dir, exist_ok=True)
@@ -196,6 +207,11 @@ async def train(
     without_faces = 0
 
     for i, item in enumerate(file_list, 1):
+        # Check for cancellation before processing each image
+        if cancellation_event and cancellation_event.is_set():
+            logger.info("Training cancelled by user")
+            raise TrainingCancelledError("Training was cancelled by user")
+
         item_path = src_dir.joinpath(item)
 
         if not await async_file_exists(str(item_path)):
@@ -209,7 +225,7 @@ async def train(
         if progress_callback and (i == 1 or i % 10 == 0 or i == total_files):
             status = "Processing images" if i < total_files else "Complete"
             progress_callback(i, total_files, status, item)
-            
+
             # Explicitly yield to the event loop to ensure WebSockets flush
             await asyncio.sleep(0.01)
 
@@ -249,12 +265,12 @@ async def train(
         if i % 10 == 0:
             logger.info(f"Memory usage: {get_process_memory():.2f} MB")
 
-    logger.info(f"Training complete. Processed {i} images")
+    logger.info(f"Training complete. Processed {with_faces + without_faces} images")
     logger.info(f"With faces: {with_faces}, Without faces: {without_faces}")
 
     # Report final progress
     if progress_callback:
-        progress_callback(i, total_files, "Complete", "")
+        progress_callback(with_faces + without_faces, total_files, "Complete", "")
 
     return TrainingProgress(
         processed=with_faces + without_faces,

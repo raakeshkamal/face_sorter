@@ -6,16 +6,22 @@ like training, cleaning, deduping, and sorting with real-time progress updates.
 """
 
 import asyncio
+import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 
 from face_sorter.api.websocket.manager import connection_manager
+from face_sorter.database import SessionRepository
+from face_sorter.models.session import SessionStatus, SessionProgress, TrainingSession, TrainingCancelledError, CleaningCancelledError
 from face_sorter.services.clean import clean_dataset
+from face_sorter.services.task_tracker import task_tracker
 from face_sorter.services.training import train
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -62,27 +68,105 @@ async def start_train(request: TrainRequest) -> OperationResponse:
         Operation response with task_id for progress tracking.
     """
     task_id = str(uuid.uuid4())
+    source_dir = request.source_dir or ""
 
-    def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
-        """Handle progress updates during training."""
-        asyncio.create_task(
-            connection_manager.send_progress("training", task_id, current, total, status, current_item)
-        )
-
-    # Start training in background
-    asyncio.create_task(
-        train(
-            source_dir=request.source_dir,
-            noface_dir=request.noface_dir,
-            broken_dir=request.broken_dir,
-            cache_dir=request.cache_dir,
-            duplicates_dir=request.duplicates_dir,
-            progress_callback=progress_handler,
-        )
+    # Create session in database
+    session_repo = SessionRepository()
+    session = TrainingSession(
+        task_id=task_id,
+        operation_type="training",
+        status=SessionStatus.PENDING,
+        source_dir=source_dir,
+        config=request.model_dump(),
+        progress=SessionProgress(0, 0, "Initializing", "").to_dict(),
+        started_at=datetime.now(timezone.utc),
     )
+    await session_repo.create_session(session)
 
-    # Send operation started message
-    await connection_manager.send_progress("training", task_id, 0, 0, "Started", "")
+    # Create cancellation event
+    cancellation_event = asyncio.Event()
+
+    async def run_training_with_session():
+        """Run training with session tracking."""
+        session_repo = SessionRepository()
+        try:
+            # Update session to RUNNING
+            await session_repo.update_session(
+                task_id,
+                {"status": SessionStatus.RUNNING.value},
+            )
+
+            def progress_handler(current: int, total: int, status_text: str, current_item: str) -> None:
+                """Handle progress updates during training."""
+                asyncio.create_task(
+                    connection_manager.send_progress("training", task_id, current, total, status_text, current_item)
+                )
+                # Also update session progress
+                asyncio.create_task(
+                    session_repo.update_session(
+                        task_id,
+                        {
+                            "progress": SessionProgress(current, total, status_text, current_item).to_dict(),
+                        },
+                    )
+                )
+
+            # Run training
+            result = await train(
+                source_dir=request.source_dir,
+                noface_dir=request.noface_dir,
+                broken_dir=request.broken_dir,
+                cache_dir=request.cache_dir,
+                duplicates_dir=request.duplicates_dir,
+                progress_callback=progress_handler,
+                cancellation_event=cancellation_event,
+            )
+
+            # Update session to COMPLETED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.COMPLETED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "progress": SessionProgress(result.processed, result.total, "Complete", "").to_dict(),
+                },
+            )
+
+            # Send completion message via WebSocket
+            await connection_manager.send_progress("training", task_id, result.processed, result.total, "Complete", "")
+
+        except TrainingCancelledError:
+            # Update session to CANCELLED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.CANCELLED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            logger.info(f"Training session {task_id} was cancelled")
+            await connection_manager.send_progress("training", task_id, 0, 0, "Cancelled", "")
+
+        except Exception as e:
+            # Update session to FAILED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.FAILED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(e),
+                },
+            )
+            logger.error(f"Training session {task_id} failed: {e}")
+            await connection_manager.send_progress("training", task_id, 0, 0, "Failed", str(e))
+
+        finally:
+            # Unregister task
+            task_tracker.unregister_task(task_id)
+
+    # Create and register the task
+    task = asyncio.create_task(run_training_with_session())
+    task_tracker.register_task(task_id, task)
 
     return OperationResponse(
         task_id=task_id,
@@ -103,30 +187,101 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
         Operation response with task_id for progress tracking.
     """
     task_id = str(uuid.uuid4())
+    source_dir = request.source_dir or ""
 
-    def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
-        """Handle progress updates during cleaning."""
-        asyncio.create_task(
-            connection_manager.send_progress("cleaning", task_id, current, total, status, current_item)
-        )
-
-    # Start cleaning in background
-    asyncio.create_task(
-        clean_dataset(
-            source_dir=request.source_dir,
-            output_dir=request.output_dir,
-            broken_dir=request.broken_dir,
-            batch_size=request.batch_size,
-            img_prefix=request.img_prefix,
-            quality=request.quality,
-            recursive=request.recursive,
-            start_index=request.start_index,
-            progress_callback=progress_handler,
-        )
+    # Create session in database
+    session_repo = SessionRepository()
+    session = TrainingSession(
+        task_id=task_id,
+        operation_type="cleaning",
+        status=SessionStatus.PENDING,
+        source_dir=source_dir,
+        config=request.model_dump(),
+        progress=SessionProgress(0, 0, "Initializing", "").to_dict(),
+        started_at=datetime.now(timezone.utc),
     )
+    await session_repo.create_session(session)
 
-    # Send operation started message
-    await connection_manager.send_progress("cleaning", task_id, 0, 0, "Started", "")
+    # Create cancellation event
+    cancellation_event = asyncio.Event()
+
+    async def run_cleaning_with_session():
+        """Run cleaning with session tracking."""
+        session_repo = SessionRepository()
+        try:
+            await session_repo.update_session(
+                task_id,
+                {"status": SessionStatus.RUNNING.value},
+            )
+
+            def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+                """Handle progress updates during cleaning."""
+                asyncio.create_task(
+                    connection_manager.send_progress("cleaning", task_id, current, total, status, current_item)
+                )
+                # Also update session progress
+                asyncio.create_task(
+                    session_repo.update_session(
+                        task_id,
+                        {
+                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                        },
+                    )
+                )
+
+            result = await clean_dataset(
+                source_dir=request.source_dir,
+                output_dir=request.output_dir,
+                broken_dir=request.broken_dir,
+                batch_size=request.batch_size,
+                img_prefix=request.img_prefix,
+                quality=request.quality,
+                recursive=request.recursive,
+                start_index=request.start_index,
+                progress_callback=progress_handler,
+                cancellation_event=cancellation_event,
+            )
+
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.COMPLETED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "progress": SessionProgress(result.processed, result.processed, "Complete", "").to_dict(),
+                },
+            )
+
+            await connection_manager.send_progress("cleaning", task_id, result.processed, result.processed, "Complete", "")
+
+        except asyncio.CancelledError:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.CANCELLED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            logger.info(f"Cleaning session {task_id} was cancelled")
+            await connection_manager.send_progress("cleaning", task_id, 0, 0, "Cancelled", "")
+
+        except Exception as e:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.FAILED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(e),
+                },
+            )
+            logger.error(f"Cleaning session {task_id} failed: {e}")
+            await connection_manager.send_progress("cleaning", task_id, 0, 0, "Failed", str(e))
+
+        finally:
+            task_tracker.unregister_task(task_id)
+
+    # Create and register the task
+    task = asyncio.create_task(run_cleaning_with_session())
+    task_tracker.register_task(task_id, task)
 
     return OperationResponse(
         task_id=task_id,
@@ -157,3 +312,97 @@ async def websocket_endpoint(websocket: WebSocket, operation_type: str, task_id:
     except Exception as e:
         connection_manager.disconnect(websocket, operation_type, task_id)
         print(f"WebSocket error: {e}")
+
+
+@router.get("/sessions/active")
+async def get_active_sessions() -> list[dict]:
+    """
+    Get all active (running) training sessions.
+
+    Returns:
+        List of active session dictionaries.
+    """
+    session_repo = SessionRepository()
+    sessions = await session_repo.get_all_sessions(status=SessionStatus.RUNNING)
+    return [session.to_dict() for session in sessions]
+
+
+@router.get("/sessions/{task_id}")
+async def get_session(task_id: str) -> dict:
+    """
+    Get a specific session by task_id.
+
+    Args:
+        task_id: Unique identifier for the session.
+
+    Returns:
+        Session dictionary.
+
+    Raises:
+        HTTPException: If session not found.
+    """
+    session_repo = SessionRepository()
+    session = await session_repo.get_session(task_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found")
+    return session.to_dict()
+
+
+@router.post("/sessions/{task_id}/cancel", response_model=OperationResponse)
+async def cancel_session(task_id: str) -> OperationResponse:
+    """
+    Cancel an ongoing training or cleaning session.
+
+    Args:
+        task_id: Unique identifier for the session.
+
+    Returns:
+        Operation response confirming cancellation.
+
+    Raises:
+        HTTPException: If session not found or cannot be cancelled.
+    """
+    session_repo = SessionRepository()
+    session = await session_repo.get_session(task_id)
+
+    if session is None:
+        logger.warning(f"Cancel requested for non-existent session {task_id}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found")
+
+    logger.info(f"Cancel requested for session {task_id} with status: {session.status}")
+
+    if session.status != SessionStatus.RUNNING:
+        logger.warning(f"Cannot cancel session {task_id}: not running (status: {session.status})")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Session {task_id} is not running (status: {session.status})",
+        )
+
+    # Cancel the task
+    cancelled = await task_tracker.cancel_task(task_id)
+
+    if cancelled:
+        logger.info(f"Successfully cancelled task {task_id} in task tracker")
+        return OperationResponse(
+            task_id=task_id,
+            operation="cancellation",
+            status="cancelled",
+        )
+    else:
+        # Task was not found in memory (e.g., server restart), but is still "RUNNING" in DB.
+        # Force cancel it in the database to fix the stuck state.
+        logger.warning(f"Task {task_id} not found in memory but marked as RUNNING in DB. Force cancelling in DB.")
+        await session_repo.update_session(
+            task_id,
+            {
+                "status": SessionStatus.CANCELLED.value,
+                "completed_at": datetime.now(timezone.utc),
+            },
+        )
+
+        logger.info(f"Force cancelled session {task_id} in database")
+        return OperationResponse(
+            task_id=task_id,
+            operation="cancellation",
+            status="cancelled",
+        )

@@ -7,6 +7,7 @@ from .repositories import (
     FaceRepository,
     fetch_data_optimized,
 )
+from .session_repository import SessionRepository
 
 __all__ = [
     "get_connection",
@@ -15,5 +16,6 @@ __all__ = [
     "FaceRepository",
     "ClassRepository",
     "ClusterRepository",
+    "SessionRepository",
     "fetch_data_optimized",
 ]

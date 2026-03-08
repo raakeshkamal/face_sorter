@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './Training.css';
 import ProgressBar from '../components/ProgressBar.jsx';
 import FolderPicker from '../components/FolderPicker.jsx';
@@ -17,7 +17,8 @@ function Training() {
   const [operationStarted, setOperationStarted] = useState(false);
   const [taskId, setTaskId] = useState('');
   const [loading, setLoading] = useState(false);
-  
+  const [cancelling, setCancelling] = useState(false);
+
   // Progress state
   const [current, setCurrent] = useState(0);
   const [total, setTotal] = useState(0);
@@ -27,6 +28,72 @@ function Training() {
 
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [currentField, setCurrentField] = useState('');
+  const [status, setStatus] = useState('idle'); // 'idle', 'active', 'complete', 'cancelled', 'failed'
+
+  // Check for active training session on component mount
+  useEffect(() => {
+    const checkActiveSession = async () => {
+      try {
+        const activeSessions = await apiService.getActiveSessions();
+        const trainingSession = activeSessions.find(s => s.operation_type === 'training');
+        if (trainingSession) {
+          setTaskId(trainingSession.task_id);
+          setOperationStarted(true);
+
+          // Restore progress from session
+          if (trainingSession.progress) {
+            setCurrent(trainingSession.progress.current || 0);
+            setTotal(trainingSession.progress.total || 0);
+            setCurrentStatus(trainingSession.progress.status || '');
+            setCurrentItem(trainingSession.progress.current_item || '');
+          }
+
+          // Set status based on session status
+          switch (trainingSession.status) {
+            case 'running':
+              setStatus('active');
+              break;
+            case 'completed':
+              setStatus('complete');
+              break;
+            case 'cancelled':
+              setStatus('cancelled');
+              break;
+            case 'failed':
+              setStatus('failed');
+              break;
+            default:
+              setStatus('idle');
+          }
+
+          // Reconnect to WebSocket
+          websocketService.connect('training', trainingSession.task_id, handleMessage, handleError);
+        }
+      } catch (error) {
+        console.error('Failed to check active sessions:', error);
+      }
+    };
+
+    checkActiveSession();
+
+    // Cleanup WebSocket on unmount
+    return () => {
+      websocketService.disconnect();
+    };
+  }, []);
+
+  // Update status based on currentStatus
+  useEffect(() => {
+    if (currentStatus === 'Complete') {
+      setStatus('complete');
+    } else if (currentStatus === 'Cancelled') {
+      setStatus('cancelled');
+    } else if (currentStatus === 'Failed') {
+      setStatus('failed');
+    } else if (operationStarted && currentStatus !== '') {
+      setStatus('active');
+    }
+  }, [currentStatus, operationStarted]);
 
   const openFolderPicker = (field) => {
     setCurrentField(field);
@@ -71,9 +138,12 @@ function Training() {
 
       case 'complete':
         setCurrentStatus('Complete');
+        setStatus('complete');
         break;
 
       case 'error':
+        setCurrentStatus('Failed');
+        setStatus('failed');
         window.alert(`Training failed: ${data.error.message || 'Unknown error'}`);
         break;
       default:
@@ -90,6 +160,7 @@ function Training() {
     e.preventDefault();
     try {
       setLoading(true);
+      setStatus('active');
       const response = await apiService.startTraining(form);
       setTaskId(response.task_id);
       setOperationStarted(true);
@@ -98,20 +169,41 @@ function Training() {
     } catch (error) {
       console.error('Failed to start training:', error);
       window.alert('Failed to start training. Please check your configuration and try again.');
+      setStatus('idle');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCancel = () => {
-    websocketService.disconnect();
-    setOperationStarted(false);
-    setTaskId('');
-    setCurrent(0);
-    setTotal(0);
-    setCurrentStatus('');
-    setCurrentItem('');
-    setLogs([]);
+  const handleCancel = async () => {
+    if (!taskId) return;
+
+    try {
+      // Show loading state
+      setCancelling(true);
+
+      // Call cancel API
+      await apiService.cancelSession(taskId);
+
+      // Disconnect WebSocket after successful cancellation
+      websocketService.disconnect();
+
+      // Update state
+      setStatus('cancelled');
+      setCurrentStatus('Cancelled');
+      setOperationStarted(false);
+      setTaskId('');
+      setCurrent(0);
+      setTotal(0);
+      setCurrentItem('');
+      setLogs([]);
+
+    } catch (error) {
+      console.error('Failed to cancel operation:', error);
+      window.alert('Failed to cancel operation. Please try again.');
+    } finally {
+      setCancelling(false);
+    }
   };
 
   const handleReset = () => {
@@ -270,6 +362,8 @@ function Training() {
             idleText="Initializing..."
             onCancel={handleCancel}
             onReset={handleReset}
+            status={status}
+            cancelling={cancelling}
           />
         </div>
       )}

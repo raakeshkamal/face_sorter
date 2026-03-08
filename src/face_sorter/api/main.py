@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 
 from face_sorter.api.routes import router as api_router
 from face_sorter.config import get_settings
+from face_sorter.database.session_repository import SessionRepository
+from face_sorter.services.task_tracker import task_tracker
 
 settings = get_settings()
 
@@ -32,6 +34,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # Startup
     print("Starting Face Sorter Web API...")
+
+    # Initialize database indexes
+    try:
+        session_repo = SessionRepository()
+        await session_repo.create_indexes()
+        print("Database indexes created successfully.")
+    except Exception as e:
+        print(f"Warning: Failed to create database indexes: {e}")
+
+    # Start periodic task cleanup
+    task_tracker.start_cleanup_task()
+    print("Periodic task cleanup started.")
+
     yield
     # Shutdown
     print("Shutting down Face Sorter Web API...")

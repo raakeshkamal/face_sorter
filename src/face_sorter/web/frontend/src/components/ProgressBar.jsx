@@ -12,16 +12,17 @@ function ProgressBar({
   currentItem = '',
   logs = [],
   onCancel,
-  onReset
+  onReset,
+  status = 'idle', // 'idle', 'active', 'complete', 'cancelled', 'failed'
+  cancelling = false
 }) {
   const started = (current > 0 && total > 0) || logs.length > 0;
-  const completed = current > 0 && current === total && total > 0;
-  const error = false;
-  const errorMessage = '';
-  const errorDetails = '';
-  const result = {};
+  const completed = status === 'complete';
+  const active = status === 'active';
+  const error = status === 'failed';
+  const cancelled = status === 'cancelled';
 
-  const loading = !completed && !error;
+  const loading = active && !completed && !error && !cancelled;
 
   const progressPercentage = useMemo(() => {
     if (total === 0) return 0;
@@ -55,9 +56,14 @@ function ProgressBar({
               <span className="progress-title">{operationType}</span>
               <span className="progress-status">{currentStatus}</span>
             </div>
-            {cancellable && (
-              <button className="cancel-btn" onClick={onCancel}>
-                ✕
+            {onCancel && (
+              <button
+                className="cancel-btn"
+                onClick={onCancel}
+                disabled={cancelling}
+                title={cancelling ? "Cancelling..." : "Cancel operation"}
+              >
+                {cancelling ? "⏳" : "✕"}
               </button>
             )}
           </div>
@@ -117,18 +123,27 @@ function ProgressBar({
               <span className="summary-label">Processed:</span>
               <span className="summary-value">{current} / {total}</span>
             </div>
-            {result.successful !== undefined && (
-              <div className="summary-item">
-                <span className="summary-label">Successful:</span>
-                <span className="summary-value">{result.successful}</span>
-              </div>
-            )}
-            {result.failed !== undefined && (
-              <div className="summary-item">
-                <span className="summary-label">Failed:</span>
-                <span className="summary-value">{result.failed}</span>
-              </div>
-            )}
+          </div>
+          <button className="btn btn-primary" onClick={onReset}>
+            Start New Operation
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (cancelled) {
+    return (
+      <div className="progress-bar-container">
+        <div className="progress-error">
+          <div className="error-icon">🛑</div>
+          <h3 className="error-title">{operationType} Cancelled</h3>
+          <p className="error-message">The operation was cancelled by the user.</p>
+          <div className="complete-summary">
+            <div className="summary-item">
+              <span className="summary-label">Processed:</span>
+              <span className="summary-value">{current} / {total}</span>
+            </div>
           </div>
           <button className="btn btn-primary" onClick={onReset}>
             Start New Operation
@@ -144,13 +159,7 @@ function ProgressBar({
         <div className="progress-error">
           <div className="error-icon">⚠</div>
           <h3 className="error-title">{operationType} Failed</h3>
-          <p className="error-message">{errorMessage}</p>
-          {errorDetails && (
-            <div className="error-details">
-              <strong>Details:</strong>
-              <p>{errorDetails}</p>
-            </div>
-          )}
+          <p className="error-message">An error occurred during the operation.</p>
           <button className="btn btn-primary" onClick={onReset}>
             Try Again
           </button>

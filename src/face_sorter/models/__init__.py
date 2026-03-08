@@ -2,12 +2,21 @@
 
 from .face import (
     CacheResult,
+    CleanResult,
+    DeduplicationResult,
+    DuplicateMoveResult,
     FaceClass,
     FaceCluster,
     FaceEmbedding,
     ProcessedImage,
     SortResult,
     TrainingProgress,
+)
+from .session import (
+    SessionProgress,
+    SessionStatus,
+    TrainingCancelledError,
+    TrainingSession,
 )
 
 __all__ = [
@@ -18,4 +27,11 @@ __all__ = [
     "SortResult",
     "TrainingProgress",
     "CacheResult",
+    "CleanResult",
+    "DeduplicationResult",
+    "DuplicateMoveResult",
+    "TrainingSession",
+    "SessionStatus",
+    "SessionProgress",
+    "TrainingCancelledError",
 ]
