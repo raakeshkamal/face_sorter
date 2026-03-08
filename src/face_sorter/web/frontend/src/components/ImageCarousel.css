@@ -1,8 +1,8 @@
 .image-carousel {
   position: relative;
-  width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0;
   border-radius: 12px;
   overflow: hidden;
   background: #1e1e1e;

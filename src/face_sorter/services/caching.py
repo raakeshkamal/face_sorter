@@ -79,9 +79,9 @@ async def build_cache(
     """
     settings = get_settings()
 
-    if cache_dir is None:
+    if not cache_dir:
         cache_dir = settings.cache_dir
-    if quality is None:
+    if not quality:
         quality = settings.cache_quality
 
     logger.info("Building cache...")

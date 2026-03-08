@@ -11,7 +11,6 @@ function Training() {
     source_dir: '',
     noface_dir: '',
     broken_dir: '',
-    cache_dir: '',
     duplicates_dir: '',
   });
 
@@ -122,26 +121,21 @@ function Training() {
         setCurrentStatus(data.progress.status);
         setCurrentItem(data.progress.current_item || '');
 
-        // Handle image data for carousel
-        if (data.progress.image_data && !isCarouselPaused) {
+        // Handle image data for carousel (only display images with faces)
+        if (data.progress.image_data && data.progress.image_data.det_score !== undefined && !isCarouselPaused) {
           setImages((prevImages) => {
             const newImage = data.progress.image_data;
             // Check if this image is already in our list
             const imageExists = prevImages.some((img) => img.filename === newImage.filename);
 
             if (!imageExists) {
-              // Add new image to the carousel
-              const updatedImages = [...prevImages, newImage];
-              // Keep only last 50 images to prevent memory issues
-              return updatedImages.slice(-50);
+              // Add new image to the carousel and keep only last 50
+              const updatedImages = [...prevImages, newImage].slice(-50);
+              // Update carousel index to always point to the newest image
+              setCarouselIndex(updatedImages.length - 1);
+              return updatedImages;
             }
             return prevImages;
-          });
-
-          // Update carousel index if we have new images
-          setCarouselIndex((prevIndex) => {
-            const hasNewImage = !images.some((img) => img.filename === data.progress.image_data?.filename);
-            return hasNewImage ? images.length : prevIndex;
           });
         }
 
@@ -319,28 +313,6 @@ function Training() {
                   </button>
                 </div>
                 <p className="form-help">Directory for corrupted images</p>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Cache Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="cache_dir"
-                    value={form.cache_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/cache"
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('cache_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory for cached images</p>
               </div>
             </div>
 

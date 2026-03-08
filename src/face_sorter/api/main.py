@@ -88,19 +88,37 @@ app.add_middleware(
 # Include API routes BEFORE static file mounts to avoid shadowing
 app.include_router(api_router, prefix="/api")
 
-# Mount static files for frontend
+# Serve images from cache directory (BEFORE frontend mount)
+cache_dir = Path(settings.cache_dir)
+cache_dir.mkdir(parents=True, exist_ok=True)
+
+import urllib.parse
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
+import logging
+main_logger = logging.getLogger(__name__)
+
+@app.get("/images/{filename:path}")
+async def serve_image(filename: str):
+    decoded_filename = urllib.parse.unquote(filename)
+    file_path = cache_dir / decoded_filename
+    
+    if not file_path.exists():
+        main_logger.error(f"Image not found at expected path: {file_path.absolute()}")
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    if not file_path.is_file():
+        main_logger.error(f"Path is not a file: {file_path.absolute()}")
+        raise HTTPException(status_code=400, detail="Path is not a file")
+        
+    return FileResponse(file_path)
+
+# Mount static files for frontend (AFTER images mount)
 static_dir = Path(__file__).parent.parent / "web" / "frontend" / "dist"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="frontend")
 else:
     print(f"Warning: Frontend static directory not found: {static_dir}")
-
-# Serve images from cache directory
-cache_dir = Path(settings.cache_dir)
-if cache_dir.exists():
-    app.mount("/images", StaticFiles(directory=str(cache_dir)), name="images")
-else:
-    print(f"Warning: Cache directory not found: {cache_dir}")
 
 
 @app.get("/health")

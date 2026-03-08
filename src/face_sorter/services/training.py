@@ -27,6 +27,7 @@ from face_sorter.utils.file_async import (
     async_move_file,
     async_makedirs,
 )
+from face_sorter.utils.image import compress_image
 
 logger = logging.getLogger(__name__)
 
@@ -168,15 +169,15 @@ async def train(
     settings = get_settings()
 
     # Use provided directories or defaults from settings
-    if source_dir is None:
+    if not source_dir:
         source_dir = settings.source_dir
-    if noface_dir is None:
+    if not noface_dir:
         noface_dir = settings.noface_dir
-    if broken_dir is None:
+    if not broken_dir:
         broken_dir = settings.broken_dir
-    if cache_dir is None:
+    if not cache_dir:
         cache_dir = settings.cache_dir
-    if duplicates_dir is None:
+    if not duplicates_dir:
         duplicates_dir = settings.duplicates_dir
 
     src_dir = Path(source_dir)
@@ -189,6 +190,7 @@ async def train(
     # Ensure output directories exist
     await async_makedirs(noface_dir, exist_ok=True)
     await async_makedirs(broken_dir, exist_ok=True)
+    await async_makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
 
     # Initialize face detection model
     logger.info("Initializing InsightFace model...")
@@ -223,6 +225,21 @@ async def train(
             logger.warning(f"File not found, skipping: {item_path}")
             continue
 
+        # Build cache BEFORE face detection so carousel can display image
+        cache_filename = item  # Keep same filename for URL consistency
+        cache_path = os.path.join(cache_dir, cache_filename)
+
+        # Build cache synchronously (await it to ensure completion)
+        cache_success = await compress_image(
+            input_path=str(item_path),
+            output_path=cache_path,
+            quality=settings.cache_quality,
+            optimize=True
+        )
+        if not cache_success:
+            logger.warning(f"Failed to build cache for {item}, but continuing training")
+
+        # Now generate face embeddings (cache file is guaranteed to exist)
         logger.info(f"Processing {i}/{total_files}: {item}")
         faces = await generate_embeddings(app, str(item_path), noface_dir)
 

@@ -1,5 +1,9 @@
 .training-view {
   animation: fadeIn 0.5s ease;
+  width: 100% !important;
+  max-width: 100% !important;
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes fadeIn {
@@ -32,7 +36,8 @@
 
 /* Form Styling */
 .training-form {
-  width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
   margin-bottom: 30px;
 }
 
@@ -136,12 +141,15 @@
 /* Progress Section */
 .progress-section {
   margin-bottom: 30px;
-  width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 /* Carousel Container */
 .carousel-container {
   margin-bottom: 24px;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .carousel-container:last-child {
@@ -150,7 +158,8 @@
 
 /* Info Section */
 .info-section {
-  width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
   margin-top: 30px;
   clear: both;
 }

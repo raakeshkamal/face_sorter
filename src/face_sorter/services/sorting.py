@@ -281,7 +281,7 @@ async def sort(
         cache_dir: Cache directory.
         max_results: Maximum number of clusters to show.
     """
-    if cache_dir is None:
+    if not cache_dir:
         cache_dir = get_settings().cache_dir
 
     # Fetch data from database

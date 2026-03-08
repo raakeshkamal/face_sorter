@@ -220,6 +220,7 @@ function ImageCarousel({
                     src={getImageUrl(currentImage)}
                     alt={currentImage.filename || `Image ${displayIndex + 1}`}
                     className="carousel-image"
+                    loaded={imageStates[displayIndex]?.loaded ? "true" : "false"}
                     onLoad={() => handleImageLoad(displayIndex)}
                     onError={() => handleImageError(displayIndex)}
                     onLoadStart={() => handleImageLoadStart(displayIndex)}

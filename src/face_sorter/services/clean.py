@@ -261,21 +261,21 @@ async def clean_dataset(
     settings = get_settings()
 
     # Use provided directories or defaults from settings
-    if source_dir is None:
+    if not source_dir:
         source_dir = settings.source_dir
-    if output_dir is None:
+    if not output_dir:
         output_dir = settings.clean_output_dir
-    if broken_dir is None:
+    if not broken_dir:
         broken_dir = settings.clean_broken_dir
-    if batch_size is None:
+    if not batch_size:
         batch_size = settings.clean_batch_size
-    if img_prefix is None:
+    if not img_prefix:
         img_prefix = settings.clean_img_prefix
-    if quality is None:
+    if not quality:
         quality = settings.clean_quality
-    if recursive is None:
+    if recursive is None:  # keep is None for booleans
         recursive = settings.clean_recursive
-    if start_index is None:
+    if start_index is None: # keep is None for start_index which could be 0
         start_index = settings.clean_start_index
 
     logger.info(f"Starting dataset cleaning from {source_dir}")
