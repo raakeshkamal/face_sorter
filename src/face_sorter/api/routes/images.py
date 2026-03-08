@@ -7,7 +7,7 @@ This module provides endpoints for browsing and retrieving face images with meta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from face_sorter.database.repositories import FaceRepository
 
@@ -18,7 +18,7 @@ class ImageResponse(BaseModel):
     """Response model for a single image."""
 
     idx: int
-    filename: str
+    filename: str = Field(alias="item")
     path: str
     cache_url: Optional[str] = None
     bbox: list[int]
@@ -26,8 +26,17 @@ class ImageResponse(BaseModel):
     age: Optional[int] = None
     gender: Optional[int] = None
 
+    @field_validator("bbox", mode="before")
+    @classmethod
+    def validate_bbox(cls, v):
+        """Ensure bbox coordinates are integers."""
+        if isinstance(v, list):
+            return [int(round(float(x))) for x in v]
+        return v
+
     class Config:
         """Pydantic config for ImageResponse."""
+        populate_by_name = True
         from_attributes = True
 
 

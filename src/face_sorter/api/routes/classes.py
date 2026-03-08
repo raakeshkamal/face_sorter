@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from face_sorter.database.repositories import ClassRepository
+from face_sorter.database.repositories import ClassRepository, ClusterRepository
 
 router = APIRouter()
 
@@ -79,9 +79,23 @@ async def create_class(
 
     # Handle different request types
     if isinstance(request, CreateClassRequest):
-        # TODO: Implement logic to get embedding from cluster
-        # For now, create with empty embedding (placeholder)
-        await class_repo.insert_class(request.class_name, [])
+        # Fetch embedding from cluster
+        cluster_repo = ClusterRepository()
+        cluster = await cluster_repo.get_cluster(request.cluster_id)
+        if not cluster:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cluster {request.cluster_id} not found",
+            )
+        
+        centroid = cluster.get("centroid", [])
+        if not centroid:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cluster {request.cluster_id} has no centroid data",
+            )
+            
+        await class_repo.insert_class(request.class_name, centroid)
     else:
         # Create with explicit embedding
         await class_repo.insert_class(request.class_name, request.embedding)

@@ -8,12 +8,14 @@ using FAISS and HDBSCAN.
 import asyncio
 import logging
 import os
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Callable
 
 import faiss
 import numpy as np
 from PIL import Image, ImageDraw
 from sklearn.cluster import HDBSCAN
+from sklearn.decomposition import PCA
 
 from face_sorter.config import get_settings
 from face_sorter.database.repositories import (
@@ -136,11 +138,15 @@ async def sort_faces_by_class(
 
     # Process files in parallel using asyncio.gather
     tasks = []
+    settings = get_settings()
     for index, i in enumerate(sorted_ids):
         class_name = sorted_class_names[index]
         path = unique_class_paths[class_name]
         img_path = os.path.join(path, imgname[i])
-        expanded_path = os.path.expanduser(imgcache[i])
+        
+        # Use filename from imgcache[i] and join with settings.cache_dir
+        source_cache_path = os.path.join(settings.cache_dir, os.path.basename(imgcache[i]))
+        expanded_path = os.path.expanduser(source_cache_path)
         bbox = np.array(imgbbox[i]).astype(np.int32)
 
         tasks.append(process_image(img_path, expanded_path, bbox))
@@ -153,45 +159,46 @@ async def sort_faces_by_class(
 
 async def show_results(
     cache_dir: str,
-    unsorted_imgs: list[str],
-    unsorted_cache: list[str],
-    unsorted_bbox: list[list[int]],
+    cluster_imgs: list[str],
+    cluster_cache: list[str],
+    cluster_bbox: list[list[int]],
     label: int,
-    indices: np.ndarray,
 ) -> None:
     """
     Show cluster results by saving images with bounding boxes.
 
     Args:
         cache_dir: Cache directory.
-        unsorted_imgs: List of unsorted image names.
-        unsorted_cache: List of cache paths.
-        unsorted_bbox: List of bounding boxes.
+        cluster_imgs: List of image names in this cluster.
+        cluster_cache: List of cache paths in this cluster.
+        cluster_bbox: List of bounding boxes in this cluster.
         label: Cluster label.
-        indices: Image indices in the cluster.
     """
     cache_path = os.path.expanduser(os.path.join(cache_dir, "clusters", str(label)))
     await async_makedirs(cache_path, exist_ok=True)
 
     # Process images in parallel using asyncio.gather
     tasks = []
-    for i in indices:
-        cache_url = os.path.join(cache_path, unsorted_imgs[i])
-        expanded_path = os.path.expanduser(unsorted_cache[i])
-        bbox = np.array(unsorted_bbox[i]).astype(np.int32)
+    settings = get_settings()
+    for i in range(len(cluster_imgs)):
+        cache_url = os.path.join(cache_path, cluster_imgs[i])
+        # Only use the filename from cluster_cache[i], ignoring any absolute paths
+        source_cache_path = os.path.join(settings.cache_dir, os.path.basename(cluster_cache[i]))
+        expanded_path = os.path.expanduser(source_cache_path)
+        bbox = np.array(cluster_bbox[i]).astype(np.int32)
 
         tasks.append(process_image(cache_url, expanded_path, bbox))
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
-    logger.info(f"Saved {len(indices)} images for cluster {label}")
+    logger.info(f"Saved {len(cluster_imgs)} images for cluster {label}")
 
 
 def match_faces_to_classes(
     imgembeddings: list[list[float]],
     classembeddings: list[np.ndarray],
     classname: list[str],
-) -> tuple[list[int], list[str], list[list[float]]]:
+) -> tuple[list[int], list[str], list[list[float]], list[int]]:
     """
     Match faces to known classes using FAISS.
 
@@ -205,6 +212,7 @@ def match_faces_to_classes(
             - sorted_ids: Indices of sorted images
             - sorted_class_names: Class names for sorted images
             - unsorted_embeddings: Embeddings of unsorted images
+            - unsorted_ids: Indices of unsorted images
     """
     # Convert to numpy arrays
     imgembeddings_arr = np.asarray(imgembeddings, dtype=np.float32)
@@ -236,6 +244,7 @@ def match_faces_to_classes(
         list(sorted_ids),
         [sorted_class_mapping[i] for i in sorted_ids],
         unsorted_embeddings,
+        unsorted_ids,
     )
 
 
@@ -255,34 +264,94 @@ def cluster_unknown_faces(
         return np.array([]), np.array([])
 
     face_embeddings = np.array(unsorted_embeddings, dtype=np.float32)
+    # Re-normalize just in case
+    faiss.normalize_L2(face_embeddings)
 
-    # Run HDBSCAN clustering
+    # Use PCA to reduce dimensionality for faster clustering
+    # 64 dimensions is usually enough to maintain face cluster integrity
+    n_samples = face_embeddings.shape[0]
+    n_features = face_embeddings.shape[1]
+    
+    # PCA n_components must be <= min(n_samples, n_features)
+    if n_samples > 100:
+        n_components = min(64, n_samples, n_features)
+        pca = PCA(n_components=n_components)
+        reduced_embeddings = pca.fit_transform(face_embeddings)
+    else:
+        reduced_embeddings = face_embeddings
+
+    # Run HDBSCAN clustering on reduced embeddings
+    # Using 'euclidean' on normalized vectors is much faster than 'cosine'
     dbscan = HDBSCAN(
-        metric="cosine",
+        metric="euclidean",
         min_samples=get_settings().cluster_min_samples,
-        store_centers="centroid",
+        min_cluster_size=get_settings().cluster_min_size,
     )
 
-    dbscan.fit(face_embeddings)
+    dbscan.fit(reduced_embeddings)
     cluster_labels = dbscan.labels_
-    cluster_centers = dbscan.centroids_
+    
+    # Calculate centroids in ORIGINAL space
+    unique_labels = np.unique(cluster_labels)
+    cluster_centers_dict = {}
+    
+    for label in unique_labels:
+        if label == -1:
+            continue
+        mask = (cluster_labels == label)
+        centroid = face_embeddings[mask].mean(axis=0)
+        # Re-normalize centroid
+        centroid = centroid / (np.linalg.norm(centroid) + 1e-9)
+        cluster_centers_dict[label] = centroid
 
-    return cluster_labels, cluster_centers
+    # Convert to expected array format (indices matching label values)
+    if not cluster_centers_dict:
+        return cluster_labels, np.array([])
+        
+    max_label = max(cluster_centers_dict.keys())
+    centers_arr = np.zeros((max_label + 1, face_embeddings.shape[1]), dtype=np.float32)
+    for label, center in cluster_centers_dict.items():
+        centers_arr[label] = center
+        
+    return cluster_labels, centers_arr
 
 
 async def sort(
     cache_dir: Optional[str] = None,
+    source_dir: Optional[str] = None,
     max_results: int = 10,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> None:
     """
     Sort faces into classes and cluster unknown faces.
 
     Args:
         cache_dir: Cache directory.
+        source_dir: Source directory to derive cache_dir from if missing.
         max_results: Maximum number of clusters to show.
+        progress_callback: Optional callback for progress reporting.
+        cancellation_event: Optional event to signal cancellation.
     """
+    settings = get_settings()
+
+    # Derive cache_dir if missing
     if not cache_dir:
-        cache_dir = get_settings().cache_dir
+        if source_dir:
+            src_path = Path(source_dir).resolve()
+            cache_dir = str(src_path.parent / ".cache")
+        else:
+            cache_dir = settings.cache_dir
+
+    if not cache_dir:
+        logger.error("No cache directory specified and source_dir not provided")
+        return
+
+    # Ensure cache directory exists
+    await async_makedirs(os.path.expanduser(cache_dir), exist_ok=True)
+
+    if progress_callback:
+        progress_callback(0, 100, "Initializing", "Fetching data from database...")
 
     # Fetch data from database
     logger.info("Fetching data from database...")
@@ -298,25 +367,60 @@ async def sort(
         imgembeddings,
     ) = await fetch_data_optimized()
 
-    # Match faces to classes
+    total_imgs = len(imgembeddings)
+    if total_imgs == 0:
+        logger.info("No images found to sort")
+        if progress_callback:
+            progress_callback(100, 100, "Complete", "No images found")
+        return
+
+    if cancellation_event and cancellation_event.is_set():
+        return
+
+    if progress_callback:
+        progress_callback(10, 100, "Matching", "Matching faces to known classes...")
+
+    # Match faces to classes in a separate thread
     logger.info("Matching faces to known classes...")
-    sorted_ids, sorted_class_names, unsorted_embeddings = match_faces_to_classes(
-        imgembeddings, classembeddings, classname
+    sorted_ids, sorted_class_names, unsorted_embeddings, unsorted_ids = await asyncio.to_thread(
+        match_faces_to_classes, imgembeddings, classembeddings, classname
     )
 
     logger.info(f"Sorted {len(sorted_ids)} faces into classes")
     logger.info(f"Found {len(unsorted_embeddings)} unsorted faces")
 
+    if cancellation_event and cancellation_event.is_set():
+        return
+
     # Sort faces by class
     if sorted_ids:
+        if progress_callback:
+            progress_callback(30, 100, "Sorting", f"Sorting {len(sorted_ids)} faces into class directories...")
         await sort_faces_by_class(
             cache_dir, imgname, imgcache, imgbbox, sorted_class_names, sorted_ids
         )
 
+    if cancellation_event and cancellation_event.is_set():
+        return
+
     # Cluster unknown faces
     if unsorted_embeddings:
-        logger.info("Clustering unknown faces...")
-        cluster_labels, cluster_centers = cluster_unknown_faces(unsorted_embeddings)
+        if progress_callback:
+            progress_callback(50, 100, "Clustering", "Clustering unknown faces...")
+        
+        # Yield to event loop to ensure progress message is sent
+        await asyncio.sleep(0.01)
+
+        import time
+        start_time = time.time()
+        logger.info(f"Starting HDBSCAN clustering for {len(unsorted_embeddings)} faces...")
+        
+        cluster_labels, cluster_centers = await asyncio.to_thread(
+            cluster_unknown_faces, unsorted_embeddings
+        )
+        
+        end_time = time.time()
+        logger.info(f"HDBSCAN clustering completed in {end_time - start_time:.2f} seconds")
 
         # Get unique labels and counts
         unique_labels, counts = np.unique(cluster_labels, return_counts=True)
@@ -327,33 +431,58 @@ async def sort(
 
         # Save clusters
         cluster_repo = ClusterRepository()
+        face_repo = FaceRepository()
         await cluster_repo.clear_clusters()
+        await face_repo.clear_all_clusters()
 
         results = 0
+        
         for i, label in enumerate(sorted_unique_labels):
             if label != -1 and results < max_results:  # Skip noise points
-                logger.info(f"Processing cluster {i}")
-                results += 1
+                if cancellation_event and cancellation_event.is_set():
+                    return
+
+                logger.info(f"Processing cluster {results}")
+                
+                # indices are relative to unsorted_embeddings
                 indices = np.where(cluster_labels == label)[0]
                 centroid = cluster_centers[label].tolist()
 
+                # Map back to real database indices (idx)
+                real_indices = [unsorted_ids[idx] for idx in indices]
+
                 await cluster_repo.insert_cluster(
                     cluster_name=int(label),
-                    cluster_id=i,
-                    indices=indices.tolist(),
+                    cluster_id=results,
+                    indices=real_indices,
                     centroid=centroid,
                 )
 
+                # Update face documents with cluster ID
+                await face_repo.update_faces_cluster(real_indices, results)
+
                 # Get data for this cluster
-                unsorted_imgs = [imgname[idx] for idx in indices]
-                unsorted_cache = [imgcache[idx] for idx in indices]
-                unsorted_bbox = [imgbbox[idx] for idx in indices]
+                cluster_imgs = [imgname[idx] for idx in real_indices]
+                cluster_cache = [imgcache[idx] for idx in real_indices]
+                cluster_bbox = [imgbbox[idx] for idx in real_indices]
+
+                if progress_callback:
+                    progress_callback(
+                        50 + int((results / max_results) * 40), 
+                        100, 
+                        "Saving Clusters", 
+                        f"Saving cluster {results} ({len(indices)} faces)..."
+                    )
 
                 await show_results(
-                    cache_dir, unsorted_imgs, unsorted_cache, unsorted_bbox, i, indices
+                    cache_dir, cluster_imgs, cluster_cache, cluster_bbox, results
                 )
+                results += 1
 
         logger.info(f"Saved {results} clusters")
+
+    if progress_callback:
+        progress_callback(100, 100, "Complete", f"Successfully sorted faces and found {results if unsorted_embeddings else 0} clusters.")
 
 
 # Synchronous wrappers for backward compatibility

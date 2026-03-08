@@ -20,6 +20,7 @@ from face_sorter.models.session import SessionStatus, SessionProgress, TrainingS
 from face_sorter.services.clean import clean_dataset
 from face_sorter.services.task_tracker import task_tracker
 from face_sorter.services.training import train
+from face_sorter.services.sorting import sort
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,6 +47,14 @@ class CleanRequest(BaseModel):
     quality: Optional[int] = None
     recursive: Optional[bool] = None
     start_index: Optional[int] = None
+
+
+class SortRequest(BaseModel):
+    """Request model for sorting operation."""
+
+    source_dir: Optional[str] = None
+    cache_dir: Optional[str] = None
+    max_results: Optional[int] = 10
 
 
 class OperationResponse(BaseModel):
@@ -286,6 +295,118 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
     return OperationResponse(
         task_id=task_id,
         operation="cleaning",
+        status="started",
+    )
+
+
+@router.post("/sort", response_model=OperationResponse)
+async def start_sort(request: SortRequest) -> OperationResponse:
+    """
+    Start sorting operation in background.
+
+    Args:
+        request: Sorting request with options.
+
+    Returns:
+        Operation response with task_id for progress tracking.
+    """
+    task_id = str(uuid.uuid4())
+    source_dir = request.source_dir or ""
+
+    # Create session in database
+    session_repo = SessionRepository()
+    session = TrainingSession(
+        task_id=task_id,
+        operation_type="sorting",
+        status=SessionStatus.PENDING,
+        source_dir=source_dir,
+        config=request.model_dump(),
+        progress=SessionProgress(0, 100, "Initializing", "").to_dict(),
+        started_at=datetime.now(timezone.utc),
+    )
+    await session_repo.create_session(session)
+
+    # Create cancellation event
+    cancellation_event = asyncio.Event()
+
+    async def run_sorting_with_session():
+        """Run sorting with session tracking."""
+        session_repo = SessionRepository()
+        try:
+            await session_repo.update_session(
+                task_id,
+                {"status": SessionStatus.RUNNING.value},
+            )
+
+            def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+                """Handle progress updates during sorting."""
+                asyncio.create_task(
+                    connection_manager.send_progress("sorting", task_id, current, total, status, current_item)
+                )
+                asyncio.create_task(
+                    session_repo.update_session(
+                        task_id,
+                        {
+                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                        },
+                    )
+                )
+
+            try:
+                await sort(
+                    cache_dir=request.cache_dir,
+                    source_dir=request.source_dir,
+                    max_results=request.max_results or 10,
+                    progress_callback=progress_handler,
+                    cancellation_event=cancellation_event,
+                )
+
+                await session_repo.update_session(
+                    task_id,
+                    {
+                        "status": SessionStatus.COMPLETED.value,
+                        "completed_at": datetime.now(timezone.utc),
+                        "progress": SessionProgress(100, 100, "Complete", "").to_dict(),
+                    },
+                )
+
+                await connection_manager.send_progress("sorting", task_id, 100, 100, "Complete", "")
+            except Exception as sort_error:
+                logger.error(f"Error during sort operation: {sort_error}", exc_info=True)
+                raise sort_error
+
+        except asyncio.CancelledError:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.CANCELLED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            await connection_manager.send_progress("sorting", task_id, 0, 0, "Cancelled", "")
+
+        except Exception as e:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.FAILED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(e),
+                },
+            )
+            logger.error(f"Sorting session {task_id} failed: {e}")
+            await connection_manager.send_progress("sorting", task_id, 0, 0, "Failed", str(e))
+
+        finally:
+            task_tracker.unregister_task(task_id)
+
+    # Create and register the task
+    task = asyncio.create_task(run_sorting_with_session())
+    task_tracker.register_task(task_id, task)
+
+    return OperationResponse(
+        task_id=task_id,
+        operation="sorting",
         status="started",
     )
 

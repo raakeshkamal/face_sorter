@@ -130,6 +130,28 @@ class FaceRepository:
         )
         return [doc async for doc in cursor]
 
+    async def update_faces_cluster(self, indices: list[int], cluster_id: int) -> None:
+        """
+        Update multiple faces with a cluster ID.
+
+        Args:
+            indices: List of face indices (idx).
+            cluster_id: Cluster ID to assign.
+        """
+        collection = await self._get_collection()
+        await collection.update_many(
+            {"idx": {"$in": indices}},
+            {"$set": {"cluster": cluster_id}}
+        )
+
+    async def clear_all_clusters(self) -> None:
+        """Remove cluster labels from all faces."""
+        collection = await self._get_collection()
+        await collection.update_many(
+            {"cluster": {"$exists": True}},
+            {"$unset": {"cluster": ""}}
+        )
+
 
 class ClassRepository:
     """Repository for managing face classes."""

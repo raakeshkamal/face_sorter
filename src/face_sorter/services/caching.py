@@ -33,8 +33,11 @@ async def compress_image(bkp: dict[str, Any], quality: int = 50) -> bool:
     try:
         img = await async_read_image(bkp["path"])
 
-        # Ensure directory exists
-        file_path = os.path.expanduser(bkp["cache_url"])
+        # Use settings.cache_dir and filename from bkp to construct output path
+        settings = get_settings()
+        filename = os.path.basename(bkp.get("cache_url") or bkp.get("item") or os.path.basename(bkp["path"]))
+        file_path = os.path.join(settings.cache_dir, filename)
+        
         await async_makedirs(os.path.dirname(file_path), exist_ok=True)
 
         # Resize and save (PIL is blocking)

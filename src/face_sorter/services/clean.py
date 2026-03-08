@@ -260,13 +260,18 @@ async def clean_dataset(
     """
     settings = get_settings()
 
-    # Use provided directories or defaults from settings
+    # Use provided directories or derive from source_dir parent
     if not source_dir:
         source_dir = settings.source_dir
+    
+    src_path = Path(source_dir).resolve()
+    parent_dir = src_path.parent
+
     if not output_dir:
-        output_dir = settings.clean_output_dir
+        output_dir = str(parent_dir / "cleaned")
     if not broken_dir:
-        broken_dir = settings.clean_broken_dir
+        broken_dir = str(parent_dir / "clean_broken")
+    
     if not batch_size:
         batch_size = settings.clean_batch_size
     if not img_prefix:

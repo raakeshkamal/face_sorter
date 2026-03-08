@@ -16,7 +16,7 @@ function ProgressBar({
   status = 'idle', // 'idle', 'active', 'complete', 'cancelled', 'failed'
   cancelling = false
 }) {
-  const started = (current > 0 && total > 0) || logs.length > 0;
+  const started = status !== 'idle';
   const completed = status === 'complete';
   const active = status === 'active';
   const error = status === 'failed';

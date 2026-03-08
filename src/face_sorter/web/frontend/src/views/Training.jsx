@@ -9,9 +9,6 @@ import websocketService from '../services/websocket';
 function Training() {
   const [form, setForm] = useState({
     source_dir: '',
-    noface_dir: '',
-    broken_dir: '',
-    duplicates_dir: '',
   });
 
   const [operationStarted, setOperationStarted] = useState(false);
@@ -247,7 +244,7 @@ function Training() {
         <div className="training-form card">
           <h2 className="form-title">Training Configuration</h2>
           <form onSubmit={startTraining}>
-            <div className="form-grid grid-2">
+            <div className="form-grid grid-1">
               <div className="form-group">
                 <label className="form-label">Source Directory</label>
                 <div className="input-with-browse">
@@ -268,74 +265,8 @@ function Training() {
                     📁 Browse
                   </button>
                 </div>
-                <p className="form-help">Directory containing images to process</p>
+                <p className="form-help">Directory containing images to process. Other required directories will be created automatically in the same parent folder.</p>
               </div>
-
-              <div className="form-group">
-                <label className="form-label">No-Face Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="noface_dir"
-                    value={form.noface_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/noface"
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('noface_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory for images without faces</p>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Broken Images Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="broken_dir"
-                    value={form.broken_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/broken"
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('broken_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory for corrupted images</p>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Duplicates Directory</label>
-              <div className="input-with-browse">
-                <input
-                  type="text"
-                  name="duplicates_dir"
-                  value={form.duplicates_dir}
-                  onChange={handleChange}
-                  className="form-input"
-                  placeholder="/path/to/duplicates"
-                />
-                <button
-                  type="button"
-                  className="browse-btn"
-                  onClick={() => openFolderPicker('duplicates_dir')}
-                >
-                  📁 Browse
-                </button>
-              </div>
-              <p className="form-help">Directory for duplicate images (will be skipped)</p>
             </div>
 
             <div className="form-actions">
@@ -399,6 +330,7 @@ function Training() {
             <li>✅ Generates 512-dim embeddings</li>
             <li>✅ Extracts face metadata (age, gender, landmarks)</li>
             <li>✅ Moves images without faces to noface directory</li>
+            <li>✅ Automatically creates required directories in the same parent</li>
             <li>✅ Real-time progress tracking</li>
           </ul>
         </div>

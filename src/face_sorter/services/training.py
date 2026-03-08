@@ -168,17 +168,21 @@ async def train(
     """
     settings = get_settings()
 
-    # Use provided directories or defaults from settings
+    # Use provided directories or derive from source_dir parent
     if not source_dir:
         source_dir = settings.source_dir
+    
+    src_path = Path(source_dir).resolve()
+    parent_dir = src_path.parent
+
     if not noface_dir:
-        noface_dir = settings.noface_dir
+        noface_dir = str(parent_dir / "noface")
     if not broken_dir:
-        broken_dir = settings.broken_dir
+        broken_dir = str(parent_dir / "broken")
     if not cache_dir:
-        cache_dir = settings.cache_dir
+        cache_dir = str(parent_dir / ".cache")
     if not duplicates_dir:
-        duplicates_dir = settings.duplicates_dir
+        duplicates_dir = str(parent_dir / "duplicates")
 
     src_dir = Path(source_dir)
     duplicates_path = Path(duplicates_dir) if duplicates_dir else None
@@ -191,6 +195,7 @@ async def train(
     await async_makedirs(noface_dir, exist_ok=True)
     await async_makedirs(broken_dir, exist_ok=True)
     await async_makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists
+    await async_makedirs(duplicates_dir, exist_ok=True) # Ensure duplicates directory exists
 
     # Initialize face detection model
     logger.info("Initializing InsightFace model...")

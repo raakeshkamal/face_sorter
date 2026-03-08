@@ -12,6 +12,7 @@ from face_sorter.api.routes.images import router as images_router
 from face_sorter.api.routes.classes import router as classes_router
 from face_sorter.api.routes.operations import router as operations_router
 from face_sorter.api.routes.filesystem import router as filesystem_router
+from face_sorter.api.routes.clusters import router as clusters_router
 
 # Create main router
 router = APIRouter()
@@ -22,6 +23,7 @@ router.include_router(images_router, prefix="/images")
 router.include_router(classes_router, prefix="/classes")
 router.include_router(operations_router, prefix="/operations")
 router.include_router(filesystem_router, prefix="/filesystem")
+router.include_router(clusters_router, prefix="/clusters")
 
 # Health check
 @router.get("/health")

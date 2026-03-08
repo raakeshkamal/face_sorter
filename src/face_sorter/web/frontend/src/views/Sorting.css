@@ -166,6 +166,57 @@
   clear: both;
 }
 
+/* Loading State */
+.sorting-loading {
+  text-align: center;
+  padding: 60px 40px;
+  margin-bottom: 30px;
+  max-width: 100% !important;
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.loading-spinner-large {
+  width: 64px;
+  height: 64px;
+  border: 6px solid #f3f3f3;
+  border-top: 6px solid var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 10px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.sorting-loading h2 {
+  font-size: 28px;
+  color: var(--secondary-color);
+  margin: 0;
+}
+
+.sorting-loading p {
+  font-size: 16px;
+  color: #666;
+  max-width: 600px;
+  line-height: 1.6;
+}
+
+.loading-status {
+  background: #f0f4ff;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
 .info-box {
   max-width: 900px;
   clear: both;
@@ -309,6 +360,74 @@
   font-size: 14px;
 }
 
+/* Modal Styles */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 40px;
+}
+
+.modal-content.large {
+  background: white;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 1200px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 20px 30px;
+  border-bottom: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 24px;
+  color: var(--secondary-color);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  transition: color 0.3s;
+}
+
+.modal-close:hover {
+  color: var(--error-color);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 30px;
+}
+
+.modal-footer {
+  padding: 20px 30px;
+  border-top: 1px solid #e0e0e0;
+  display: flex;
+  justify-content: flex-end;
+  background: #f8f9fa;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .form-grid,
@@ -327,5 +446,17 @@
 
   .cluster-images {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal-content.large {
+    max-height: 95vh;
+  }
+
+  .modal-header, .modal-body, .modal-footer {
+    padding: 15px;
   }
 }

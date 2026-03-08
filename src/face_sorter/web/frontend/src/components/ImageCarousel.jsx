@@ -41,28 +41,29 @@ function ImageCarousel({
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
 
-  // Handle image loading states
-  const handleImageLoad = useCallback((index) => {
-    console.log(`[ImageCarousel] Successfully loaded image at index ${index}`);
+  // Handle image loading states using filename as key
+  const handleImageLoad = useCallback((key) => {
+    if (!key) return;
     setImageStates(prev => ({
       ...prev,
-      [index]: { ...prev[index], loaded: true, loading: false }
+      [key]: { ...prev[key], loaded: true, loading: false, error: false }
     }));
   }, []);
 
-  const handleImageError = useCallback((index) => {
-    const imageUrl = images[index]?.cache_url || images[index]?.filename;
-    console.error(`[ImageCarousel] Failed to load image at index ${index}:`, imageUrl);
+  const handleImageError = useCallback((key) => {
+    if (!key) return;
+    console.error(`[ImageCarousel] Failed to load image: ${key}`);
     setImageStates(prev => ({
       ...prev,
-      [index]: { ...prev[index], loaded: false, error: true }
+      [key]: { ...prev[key], loaded: false, loading: false, error: true }
     }));
-  }, [images]);
+  }, []);
 
-  const handleImageLoadStart = useCallback((index) => {
+  const handleImageLoadStart = useCallback((key) => {
+    if (!key) return;
     setImageStates(prev => ({
       ...prev,
-      [index]: { ...prev[index], loading: true }
+      [key]: { ...prev[key], loading: true, error: false }
     }));
   }, []);
 
@@ -77,18 +78,27 @@ function ImageCarousel({
   useEffect(() => {
     const preloadImages = (indices) => {
       indices.forEach((idx) => {
-        if (idx >= 0 && idx < images.length && !imageStates[idx]?.preloaded) {
-          const img = new Image();
+        if (idx >= 0 && idx < images.length) {
           const image = images[idx];
-          const imageUrl = getImageUrl(image);
-          if (imageUrl) {
-            img.src = imageUrl;
-            img.onload = () => {
-              setImageStates(prev => ({
-                ...prev,
-                [idx]: { ...prev[idx], preloaded: true }
-              }));
-            };
+          const key = image?.filename;
+          if (key && !imageStates[key]?.preloaded && !imageStates[key]?.loaded) {
+            const img = new Image();
+            const imageUrl = getImageUrl(image);
+            if (imageUrl) {
+              img.src = imageUrl;
+              img.onload = () => {
+                setImageStates(prev => ({
+                  ...prev,
+                  [key]: { ...prev[key], preloaded: true, loaded: true }
+                }));
+              };
+              img.onerror = () => {
+                setImageStates(prev => ({
+                  ...prev,
+                  [key]: { ...prev[key], error: true }
+                }));
+              };
+            }
           }
         }
       });
@@ -101,7 +111,7 @@ function ImageCarousel({
       displayIndex - 1
     ];
     preloadImages(indicesToPreload);
-  }, [displayIndex, images, imageStates]);
+  }, [displayIndex, images, imageStates, getImageUrl]);
 
   // Handle pause on hover
   const handleMouseEnter = () => {
@@ -156,25 +166,30 @@ function ImageCarousel({
 
   // Cleanup old image states to prevent memory leaks
   useEffect(() => {
-    // Keep only states for images within a reasonable range of current position
-    const keepRange = 10;
-    const minKeep = Math.max(0, displayIndex - keepRange);
-    const maxKeep = Math.min(images.length - 1, displayIndex + keepRange);
+    if (images.length === 0) return;
+
+    // Keep only states for images currently in the images array
+    const currentFilenames = new Set(images.map(img => img.filename).filter(Boolean));
 
     setImageStates(prev => {
+      let hasChanged = false;
       const newState = {};
+      
       Object.keys(prev).forEach(key => {
-        const idx = parseInt(key);
-        if (idx >= minKeep && idx <= maxKeep) {
+        if (currentFilenames.has(key)) {
           newState[key] = prev[key];
+        } else {
+          hasChanged = true;
         }
       });
-      return newState;
+      
+      return hasChanged ? newState : prev;
     });
-  }, [displayIndex, images.length]);
+  }, [images]);
 
   const currentImage = images[displayIndex];
   const hasImages = images.length > 0;
+  const imageKey = currentImage?.filename || `idx-${displayIndex}`;
 
   if (!hasImages) {
     return (
@@ -210,7 +225,7 @@ function ImageCarousel({
           {currentImage && (
             <div className="carousel-slide active">
               <div className="image-container">
-                {imageStates[displayIndex]?.error ? (
+                {imageStates[imageKey]?.error ? (
                   <div className="image-error">
                     <span className="error-icon">⚠️</span>
                     <span className="error-text">Failed to load image</span>
@@ -220,14 +235,14 @@ function ImageCarousel({
                     src={getImageUrl(currentImage)}
                     alt={currentImage.filename || `Image ${displayIndex + 1}`}
                     className="carousel-image"
-                    loaded={imageStates[displayIndex]?.loaded ? "true" : "false"}
-                    onLoad={() => handleImageLoad(displayIndex)}
-                    onError={() => handleImageError(displayIndex)}
-                    onLoadStart={() => handleImageLoadStart(displayIndex)}
+                    loaded={imageStates[imageKey]?.loaded ? "true" : "false"}
+                    onLoad={() => handleImageLoad(imageKey)}
+                    onError={() => handleImageError(imageKey)}
+                    onLoadStart={() => handleImageLoadStart(imageKey)}
                     loading="lazy"
                   />
                 )}
-                {imageStates[displayIndex]?.loading && !imageStates[displayIndex]?.loaded && (
+                {imageStates[imageKey]?.loading && !imageStates[imageKey]?.loaded && (
                   <div className="image-loading">
                     <div className="loading-spinner"></div>
                   </div>

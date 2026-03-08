@@ -8,8 +8,6 @@ import websocketService from '../services/websocket';
 function Cleaning() {
   const [form, setForm] = useState({
     source_dir: '',
-    output_dir: '',
-    broken_dir: '',
     batch_size: 25,
     img_prefix: 'IMG',
     quality: 95,
@@ -246,52 +244,7 @@ function Cleaning() {
                     📁 Browse
                   </button>
                 </div>
-                <p className="form-help">Directory containing images to clean</p>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Output Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="output_dir"
-                    value={form.output_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/cleaned/images"
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('output_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory for cleaned images</p>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Broken Images Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="broken_dir"
-                    value={form.broken_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/broken/images"
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('broken_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory for invalid/corrupted images</p>
+                <p className="form-help">Directory containing images to clean. Output and broken directories will be created in the same parent folder.</p>
               </div>
 
               <div className="form-group">
@@ -413,6 +366,7 @@ function Cleaning() {
             <li>✅ Converts to RGB JPEG format</li>
             <li>✅ Applies sequential naming (IMG_001.jpg, IMG_002.jpg, etc.)</li>
             <li>✅ Moves broken images to separate directory</li>
+            <li>✅ Automatically creates output and broken folders in same parent</li>
             <li>✅ Real-time progress tracking</li>
             <li>✅ Supports various image formats (JPG, PNG, BMP, etc.)</li>
           </ul>

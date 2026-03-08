@@ -79,6 +79,11 @@ class Settings(BaseSettings):
         ge=1,
         description="Minimum samples for HDBSCAN clustering",
     )
+    cluster_min_size: int = Field(
+        default=5,
+        ge=1,
+        description="Minimum cluster size for HDBSCAN clustering",
+    )
     batch_size: int = Field(
         default=32,
         ge=1,

@@ -60,6 +60,22 @@ export const apiService = {
     return response.data;
   },
 
+  async startSorting(data) {
+    const response = await api.post("/operations/sort", data);
+    return response.data;
+  },
+
+  // Clusters
+  async getClusters(limit = 10) {
+    const response = await api.get("/clusters", { params: { limit } });
+    return response.data;
+  },
+
+  async getClusterImages(clusterId, params = {}) {
+    const response = await api.get(`/clusters/${clusterId}/images`, { params });
+    return response.data;
+  },
+
   // Sessions
   async getActiveSessions() {
     const response = await api.get("/operations/sessions/active");
