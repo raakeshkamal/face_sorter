@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './Cleaning.css';
 import ProgressBar from '../components/ProgressBar.jsx';
 import FolderPicker from '../components/FolderPicker.jsx';
 import { apiService } from '../services/api';
+import websocketService from '../services/websocket';
 
 function Cleaning() {
   const [form, setForm] = useState({
@@ -19,9 +20,74 @@ function Cleaning() {
   const [operationStarted, setOperationStarted] = useState(false);
   const [taskId, setTaskId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Progress state
+  const [current, setCurrent] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [currentStatus, setCurrentStatus] = useState('');
+  const [currentItem, setCurrentItem] = useState('');
+  const [logs, setLogs] = useState([]);
+
+  const [status, setStatus] = useState('idle'); // 'idle', 'active', 'complete', 'cancelled', 'failed'
 
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [currentField, setCurrentField] = useState('');
+
+  // Check for active cleaning session on component mount
+  useEffect(() => {
+    const checkActiveSession = async () => {
+      try {
+        const activeSessions = await apiService.getActiveSessions();
+        const cleaningSession = activeSessions.find(s => s.operation_type === 'cleaning');
+        if (cleaningSession) {
+          // Only reconnect WebSocket for sessions with status 'running'
+          if (cleaningSession.status === 'running') {
+            setTaskId(cleaningSession.task_id);
+            setOperationStarted(true);
+
+            // Restore progress from session
+            if (cleaningSession.progress) {
+              setCurrent(cleaningSession.progress.current || 0);
+              setTotal(cleaningSession.progress.total || 0);
+              setCurrentStatus(cleaningSession.progress.status || '');
+              setCurrentItem(cleaningSession.progress.current_item || '');
+            }
+
+            setStatus('active');
+
+            // Reconnect to WebSocket only for running sessions
+            websocketService.connect('cleaning', cleaningSession.task_id, handleMessage, handleError);
+          } else {
+            // Session is cancelled, completed, or failed - don't reconnect
+            console.log(`Session ${cleaningSession.task_id} has status ${cleaningSession.status}, not reconnecting`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check active sessions:', error);
+      }
+    };
+
+    checkActiveSession();
+
+    // Cleanup WebSocket on unmount
+    return () => {
+      websocketService.disconnect();
+    };
+  }, []);
+
+  // Update status based on currentStatus
+  useEffect(() => {
+    if (currentStatus === 'Complete') {
+      setStatus('complete');
+    } else if (currentStatus === 'Cancelled') {
+      setStatus('cancelled');
+    } else if (currentStatus === 'Failed') {
+      setStatus('failed');
+    } else if (operationStarted && currentStatus !== '') {
+      setStatus('active');
+    }
+  }, [currentStatus, operationStarted]);
 
   const openFolderPicker = (field) => {
     setCurrentField(field);
@@ -49,30 +115,103 @@ function Cleaning() {
     }));
   };
 
+  const handleMessage = (data) => {
+    switch (data.type) {
+      case 'progress':
+        setCurrent(data.progress.current);
+        setTotal(data.progress.total);
+        setCurrentStatus(data.progress.status);
+        setCurrentItem(data.progress.current_item || '');
+
+        setLogs((prevLogs) => {
+          const newLog = {
+            time: new Date().toLocaleTimeString(),
+            message: `${data.progress.status}: ${data.progress.current_item || ''}`,
+          };
+          const updatedLogs = [newLog, ...prevLogs];
+          return updatedLogs.slice(0, 20);
+        });
+        break;
+
+      case 'complete':
+        setCurrentStatus('Complete');
+        setStatus('complete');
+        break;
+
+      case 'error':
+        setCurrentStatus('Failed');
+        setStatus('failed');
+        window.alert(`Cleaning failed: ${data.error.message || 'Unknown error'}`);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleError = (wsError) => {
+    console.error('[Cleaning] WebSocket error:', wsError);
+    window.alert('WebSocket connection error. Progress updates may not be available.');
+  };
+
   const startCleaning = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
+      setStatus('active');
       const response = await apiService.startCleaning(form);
       setTaskId(response.task_id);
       setOperationStarted(true);
+
+      websocketService.connect('cleaning', response.task_id, handleMessage, handleError);
     } catch (error) {
       console.error('Failed to start cleaning:', error);
       window.alert('Failed to start cleaning. Please check your configuration and try again.');
+      setStatus('idle');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCancel = () => {
-    console.log('Cleaning cancelled');
-    setOperationStarted(false);
-    setTaskId('');
+  const handleCancel = async () => {
+    if (!taskId) return;
+
+    try {
+      // Show loading state
+      setCancelling(true);
+
+      // Call cancel API
+      await apiService.cancelSession(taskId);
+
+      // Disconnect WebSocket after successful cancellation
+      websocketService.disconnect();
+
+      // Update state
+      setStatus('cancelled');
+      setCurrentStatus('Cancelled');
+      setOperationStarted(false);
+      setTaskId('');
+      setCurrent(0);
+      setTotal(0);
+      setCurrentItem('');
+      setLogs([]);
+
+    } catch (error) {
+      console.error('Failed to cancel operation:', error);
+      window.alert('Failed to cancel operation. Please try again.');
+    } finally {
+      setCancelling(false);
+    }
   };
 
   const handleReset = () => {
+    websocketService.disconnect();
     setOperationStarted(false);
     setTaskId('');
+    setCurrent(0);
+    setTotal(0);
+    setCurrentStatus('');
+    setCurrentItem('');
+    setLogs([]);
   };
 
   return (
@@ -240,8 +379,16 @@ function Cleaning() {
           <ProgressBar
             operationType="Cleaning"
             taskId={taskId}
+            current={current}
+            total={total}
+            currentStatus={currentStatus}
+            currentItem={currentItem}
+            logs={logs}
+            idleText="Initializing..."
             onCancel={handleCancel}
             onReset={handleReset}
+            status={status}
+            cancelling={cancelling}
           />
         </div>
       )}

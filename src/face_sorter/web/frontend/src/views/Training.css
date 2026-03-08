@@ -139,6 +139,15 @@
   width: 100%;
 }
 
+/* Carousel Container */
+.carousel-container {
+  margin-bottom: 24px;
+}
+
+.carousel-container:last-child {
+  margin-bottom: 0;
+}
+
 /* Info Section */
 .info-section {
   width: 100%;

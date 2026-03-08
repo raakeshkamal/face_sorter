@@ -96,10 +96,10 @@ async def start_train(request: TrainRequest) -> OperationResponse:
                 {"status": SessionStatus.RUNNING.value},
             )
 
-            def progress_handler(current: int, total: int, status_text: str, current_item: str) -> None:
+            def progress_handler(current: int, total: int, status_text: str, current_item: str, image_data: dict | None = None) -> None:
                 """Handle progress updates during training."""
                 asyncio.create_task(
-                    connection_manager.send_progress("training", task_id, current, total, status_text, current_item)
+                    connection_manager.send_progress("training", task_id, current, total, status_text, current_item, image_data)
                 )
                 # Also update session progress
                 asyncio.create_task(
@@ -300,12 +300,26 @@ async def websocket_endpoint(websocket: WebSocket, operation_type: str, task_id:
         operation_type: Type of operation (training, cleaning, deduping, sorting).
         task_id: Unique task identifier.
     """
+    # Validate that the session exists and is RUNNING before accepting connection
+    session_repo = SessionRepository()
+    session = await session_repo.get_session(task_id)
+
+    if session is None:
+        logger.warning(f"WebSocket connection rejected: Session {task_id} not found")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session not found")
+        return
+
+    if session.status != SessionStatus.RUNNING:
+        logger.warning(f"WebSocket connection rejected: Session {task_id} is not running (status: {session.status})")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Session is not running (status: {session.status})")
+        return
+
     await connection_manager.connect(websocket, operation_type, task_id)
 
     try:
         # Keep connection alive and receive any messages
         while True:
-            data = await websocket.receive_text()
+            await websocket.receive_text()
             # Could handle client messages here if needed
     except WebSocketDisconnect:
         connection_manager.disconnect(websocket, operation_type, task_id)
@@ -378,31 +392,31 @@ async def cancel_session(task_id: str) -> OperationResponse:
             detail=f"Session {task_id} is not running (status: {session.status})",
         )
 
+    # Close all WebSocket connections for this task BEFORE cancelling
+    await connection_manager.disconnect_all_for_task(session.operation_type, task_id)
+    logger.info(f"Closed WebSocket connections for session {task_id}")
+
     # Cancel the task
     cancelled = await task_tracker.cancel_task(task_id)
 
     if cancelled:
         logger.info(f"Successfully cancelled task {task_id} in task tracker")
-        return OperationResponse(
-            task_id=task_id,
-            operation="cancellation",
-            status="cancelled",
-        )
     else:
-        # Task was not found in memory (e.g., server restart), but is still "RUNNING" in DB.
-        # Force cancel it in the database to fix the stuck state.
+        # Task was not found in memory (e.g., server restart)
         logger.warning(f"Task {task_id} not found in memory but marked as RUNNING in DB. Force cancelling in DB.")
-        await session_repo.update_session(
-            task_id,
-            {
-                "status": SessionStatus.CANCELLED.value,
-                "completed_at": datetime.now(timezone.utc),
-            },
-        )
 
-        logger.info(f"Force cancelled session {task_id} in database")
-        return OperationResponse(
-            task_id=task_id,
-            operation="cancellation",
-            status="cancelled",
-        )
+    # Delete the session from database immediately (instead of just marking as cancelled)
+    deleted = await session_repo.delete_session(task_id)
+    if deleted:
+        logger.info(f"Deleted session {task_id} from database")
+    else:
+        logger.warning(f"Failed to delete session {task_id} from database")
+
+    # Unregister task from tracker
+    task_tracker.unregister_task(task_id)
+
+    return OperationResponse(
+        task_id=task_id,
+        operation="cancellation",
+        status="cancelled",
+    )

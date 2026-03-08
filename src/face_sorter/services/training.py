@@ -138,7 +138,7 @@ async def train(
     broken_dir: Optional[str] = None,
     cache_dir: Optional[str] = None,
     duplicates_dir: Optional[str] = None,
-    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    progress_callback: Optional[Callable[[int, int, str, str, dict[str, Any] | None], None]] = None,
     cancellation_event: Optional[asyncio.Event] = None,
 ) -> TrainingProgress:
     """
@@ -150,8 +150,13 @@ async def train(
         broken_dir: Directory for corrupted images.
         cache_dir: Directory for cache.
         duplicates_dir: Directory for duplicate images (will be skipped).
-        progress_callback: Optional callback function(current, total, status, current_item)
-                        for reporting progress during training.
+        progress_callback: Optional callback function(current, total, status, current_item, image_data)
+                        for reporting progress during training. image_data contains:
+                        - filename: Name of the current image
+                        - cache_url: URL to the cached image
+                        - det_score: Detection confidence score (if face found)
+                        - age: Estimated age (if face found)
+                        - gender: Gender (0=male, 1=female, if face found)
         cancellation_event: Optional asyncio.Event that, when set, signals cancellation.
 
     Returns:
@@ -224,7 +229,20 @@ async def train(
         # Report progress
         if progress_callback and (i == 1 or i % 10 == 0 or i == total_files):
             status = "Processing images" if i < total_files else "Complete"
-            progress_callback(i, total_files, status, item)
+            # Include image data for the carousel
+            image_data = {
+                "filename": item,
+                "cache_url": item,  # Just the filename, frontend handles URL construction
+            }
+            # Add face detection metadata if available
+            if len(faces) > 0:
+                face = faces[0]  # Use first face for metadata
+                image_data.update({
+                    "det_score": float(face.det_score),
+                    "age": int(face.age),
+                    "gender": int(face.gender),
+                })
+            progress_callback(i, total_files, status, item, image_data)
 
             # Explicitly yield to the event loop to ensure WebSockets flush
             await asyncio.sleep(0.01)
@@ -256,7 +274,7 @@ async def train(
                 pose=face.pose.tolist(),
                 landmark_2d_106=face.landmark_2d_106.tolist(),
                 embedding=face.embedding.tolist(),
-                cache_url=os.path.join(cache_dir, item),
+                cache_url=item,  # Just the filename, frontend handles URL construction
             )
             await face_repo.insert_face(face_data.to_dict())
             count += 1
@@ -270,7 +288,7 @@ async def train(
 
     # Report final progress
     if progress_callback:
-        progress_callback(with_faces + without_faces, total_files, "Complete", "")
+        progress_callback(with_faces + without_faces, total_files, "Complete", "", None)
 
     return TrainingProgress(
         processed=with_faces + without_faces,
@@ -301,4 +319,4 @@ def train_sync(
     Returns:
         TrainingProgress: Information about training progress.
     """
-    return asyncio.run(train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir))
+    return asyncio.run(train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir, None))

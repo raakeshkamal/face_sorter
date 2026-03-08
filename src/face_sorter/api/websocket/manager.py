@@ -84,6 +84,7 @@ class ConnectionManager:
         total: int,
         status: str,
         current_item: str | None = None,
+        image_data: dict[str, Any] | None = None,
     ) -> None:
         """
         Send a progress update to connected clients.
@@ -95,6 +96,7 @@ class ConnectionManager:
             total: Total value for progress calculation
             status: Current status message
             current_item: Optional name of the current item being processed
+            image_data: Optional image metadata for carousel display
         """
         percentage = (current / total * 100) if total > 0 else 0.0
         message = {
@@ -109,6 +111,11 @@ class ConnectionManager:
                 "current_item": current_item,
             },
         }
+
+        # Add image data if available
+        if image_data:
+            message["progress"]["image_data"] = image_data
+
         print(f"DEBUG(WebSocket): send_progress called for {operation_type}:{task_id} -> {current}/{total}")
         await self.broadcast(operation_type, task_id, message)
 
@@ -149,6 +156,25 @@ class ConnectionManager:
             "error": error,
         }
         await self.broadcast(operation_type, task_id, message)
+
+    async def disconnect_all_for_task(self, operation_type: str, task_id: str) -> None:
+        """
+        Disconnect all WebSocket connections for a specific task.
+
+        Args:
+            operation_type: Type of operation
+            task_id: Unique identifier for the task
+        """
+        key = f"{operation_type}:{task_id}"
+        if key in self.active_connections:
+            connections = self.active_connections[key]
+            for connection in connections:
+                try:
+                    await connection.close()
+                except Exception as e:
+                    print(f"DEBUG(WebSocket): Error closing connection: {e}")
+            del self.active_connections[key]
+            print(f"DEBUG(WebSocket): Disconnected all connections for {key}")
 
 
 # Global connection manager instance

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import './Training.css';
 import ProgressBar from '../components/ProgressBar.jsx';
+import ImageCarousel from '../components/ImageCarousel.jsx';
 import FolderPicker from '../components/FolderPicker.jsx';
 import { apiService } from '../services/api';
 import websocketService from '../services/websocket';
@@ -26,6 +27,11 @@ function Training() {
   const [currentItem, setCurrentItem] = useState('');
   const [logs, setLogs] = useState([]);
 
+  // Image carousel state
+  const [images, setImages] = useState([]);
+  const [carouselIndex, setCarouselIndex] = useState(0);
+  const [isCarouselPaused, setIsCarouselPaused] = useState(false);
+
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [currentField, setCurrentField] = useState('');
   const [status, setStatus] = useState('idle'); // 'idle', 'active', 'complete', 'cancelled', 'failed'
@@ -37,37 +43,27 @@ function Training() {
         const activeSessions = await apiService.getActiveSessions();
         const trainingSession = activeSessions.find(s => s.operation_type === 'training');
         if (trainingSession) {
-          setTaskId(trainingSession.task_id);
-          setOperationStarted(true);
+          // Only reconnect WebSocket for sessions with status 'running'
+          if (trainingSession.status === 'running') {
+            setTaskId(trainingSession.task_id);
+            setOperationStarted(true);
 
-          // Restore progress from session
-          if (trainingSession.progress) {
-            setCurrent(trainingSession.progress.current || 0);
-            setTotal(trainingSession.progress.total || 0);
-            setCurrentStatus(trainingSession.progress.status || '');
-            setCurrentItem(trainingSession.progress.current_item || '');
+            // Restore progress from session
+            if (trainingSession.progress) {
+              setCurrent(trainingSession.progress.current || 0);
+              setTotal(trainingSession.progress.total || 0);
+              setCurrentStatus(trainingSession.progress.status || '');
+              setCurrentItem(trainingSession.progress.current_item || '');
+            }
+
+            setStatus('active');
+
+            // Reconnect to WebSocket only for running sessions
+            websocketService.connect('training', trainingSession.task_id, handleMessage, handleError);
+          } else {
+            // Session is cancelled, completed, or failed - don't reconnect
+            console.log(`Session ${trainingSession.task_id} has status ${trainingSession.status}, not reconnecting`);
           }
-
-          // Set status based on session status
-          switch (trainingSession.status) {
-            case 'running':
-              setStatus('active');
-              break;
-            case 'completed':
-              setStatus('complete');
-              break;
-            case 'cancelled':
-              setStatus('cancelled');
-              break;
-            case 'failed':
-              setStatus('failed');
-              break;
-            default:
-              setStatus('idle');
-          }
-
-          // Reconnect to WebSocket
-          websocketService.connect('training', trainingSession.task_id, handleMessage, handleError);
         }
       } catch (error) {
         console.error('Failed to check active sessions:', error);
@@ -125,6 +121,29 @@ function Training() {
         setTotal(data.progress.total);
         setCurrentStatus(data.progress.status);
         setCurrentItem(data.progress.current_item || '');
+
+        // Handle image data for carousel
+        if (data.progress.image_data && !isCarouselPaused) {
+          setImages((prevImages) => {
+            const newImage = data.progress.image_data;
+            // Check if this image is already in our list
+            const imageExists = prevImages.some((img) => img.filename === newImage.filename);
+
+            if (!imageExists) {
+              // Add new image to the carousel
+              const updatedImages = [...prevImages, newImage];
+              // Keep only last 50 images to prevent memory issues
+              return updatedImages.slice(-50);
+            }
+            return prevImages;
+          });
+
+          // Update carousel index if we have new images
+          setCarouselIndex((prevIndex) => {
+            const hasNewImage = !images.some((img) => img.filename === data.progress.image_data?.filename);
+            return hasNewImage ? images.length : prevIndex;
+          });
+        }
 
         setLogs((prevLogs) => {
           const newLog = {
@@ -197,6 +216,9 @@ function Training() {
       setTotal(0);
       setCurrentItem('');
       setLogs([]);
+      setImages([]);
+      setCarouselIndex(0);
+      setIsCarouselPaused(false);
 
     } catch (error) {
       console.error('Failed to cancel operation:', error);
@@ -215,6 +237,9 @@ function Training() {
     setCurrentStatus('');
     setCurrentItem('');
     setLogs([]);
+    setImages([]);
+    setCarouselIndex(0);
+    setIsCarouselPaused(false);
   };
 
   return (
@@ -351,6 +376,19 @@ function Training() {
         </div>
       ) : (
         <div className="progress-section">
+          {/* Image Carousel for visual feedback */}
+          {status === 'active' && images.length > 0 && (
+            <ImageCarousel
+              images={images}
+              currentIndex={carouselIndex}
+              totalImages={total}
+              autoAdvance={!isCarouselPaused}
+              onPauseToggle={setIsCarouselPaused}
+              className="carousel-container"
+            />
+          )}
+
+          {/* Progress bar for detailed information */}
           <ProgressBar
             operationType="Training"
             taskId={taskId}

@@ -43,6 +43,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         print(f"Warning: Failed to create database indexes: {e}")
 
+    # Clean up orphaned sessions (marked RUNNING but no task in memory)
+    try:
+        session_repo = SessionRepository()
+        from face_sorter.models.session import SessionStatus
+        orphaned_sessions = await session_repo.get_all_sessions(status=SessionStatus.RUNNING)
+        if orphaned_sessions:
+            print(f"Found {len(orphaned_sessions)} orphaned sessions marked as RUNNING")
+            for session in orphaned_sessions:
+                # Check if task exists in memory
+                if not task_tracker.get_active_task(session.task_id):
+                    print(f"Deleting orphaned session {session.task_id} (no task in memory)")
+                    await session_repo.delete_session(session.task_id)
+            print("Orphaned session cleanup completed.")
+    except Exception as e:
+        print(f"Warning: Failed to cleanup orphaned sessions: {e}")
+
     # Start periodic task cleanup
     task_tracker.start_cleanup_task()
     print("Periodic task cleanup started.")
