@@ -69,7 +69,7 @@ class Settings(BaseSettings):
         description="Quality setting for cached images (1-100)",
     )
     similarity_threshold: float = Field(
-        default=0.5,
+        default=0.6,
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for face matching",

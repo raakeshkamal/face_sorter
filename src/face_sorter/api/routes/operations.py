@@ -55,6 +55,8 @@ class SortRequest(BaseModel):
     source_dir: Optional[str] = None
     cache_dir: Optional[str] = None
     max_results: Optional[int] = 10
+    min_samples: Optional[int] = None
+    min_cluster_size: Optional[int] = None
 
 
 class OperationResponse(BaseModel):
@@ -223,10 +225,14 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
                 {"status": SessionStatus.RUNNING.value},
             )
 
-            def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+            def progress_handler(
+                current: int, total: int, status: str, current_item: str, current_data: Optional[dict] = None
+            ) -> None:
                 """Handle progress updates during cleaning."""
                 asyncio.create_task(
-                    connection_manager.send_progress("cleaning", task_id, current, total, status, current_item)
+                    connection_manager.send_progress(
+                        "cleaning", task_id, current, total, status, current_item, current_data
+                    )
                 )
                 # Also update session progress
                 asyncio.create_task(
@@ -338,10 +344,14 @@ async def start_sort(request: SortRequest) -> OperationResponse:
                 {"status": SessionStatus.RUNNING.value},
             )
 
-            def progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+            def progress_handler(
+                current: int, total: int, status: str, current_item: str, current_data: Optional[dict] = None
+            ) -> None:
                 """Handle progress updates during sorting."""
                 asyncio.create_task(
-                    connection_manager.send_progress("sorting", task_id, current, total, status, current_item)
+                    connection_manager.send_progress(
+                        "sorting", task_id, current, total, status, current_item, current_data
+                    )
                 )
                 asyncio.create_task(
                     session_repo.update_session(
@@ -357,6 +367,8 @@ async def start_sort(request: SortRequest) -> OperationResponse:
                     cache_dir=request.cache_dir,
                     source_dir=request.source_dir,
                     max_results=request.max_results or 10,
+                    min_samples=request.min_samples,
+                    min_cluster_size=request.min_cluster_size,
                     progress_callback=progress_handler,
                     cancellation_event=cancellation_event,
                 )

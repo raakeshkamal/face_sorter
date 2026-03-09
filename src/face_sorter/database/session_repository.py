@@ -137,7 +137,7 @@ class SessionRepository:
         if operation_type:
             query["operation_type"] = operation_type
 
-        cursor = collection.find(query).sort("started_at", ASCENDING).limit(limit)
+        cursor = collection.find(query).sort("started_at", -1).limit(limit)
         return [TrainingSession.from_dict(doc) async for doc in cursor]
 
     async def delete_session(self, task_id: str) -> bool:

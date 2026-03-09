@@ -88,10 +88,6 @@ app.add_middleware(
 # Include API routes BEFORE static file mounts to avoid shadowing
 app.include_router(api_router, prefix="/api")
 
-# Serve images from cache directory (BEFORE frontend mount)
-cache_dir = Path(settings.cache_dir)
-cache_dir.mkdir(parents=True, exist_ok=True)
-
 import urllib.parse
 from fastapi.responses import FileResponse
 from fastapi import HTTPException
@@ -101,17 +97,45 @@ main_logger = logging.getLogger(__name__)
 @app.get("/images/{filename:path}")
 async def serve_image(filename: str):
     decoded_filename = urllib.parse.unquote(filename)
-    file_path = cache_dir / decoded_filename
     
-    if not file_path.exists():
-        main_logger.error(f"Image not found at expected path: {file_path.absolute()}")
+    # Try to determine the cache directory from the most recent session
+    try:
+        session_repo = SessionRepository()
+        # Get most recent sessions
+        sessions = await session_repo.get_all_sessions(limit=5)
+        
+        # Sort by started_at descending (SessionRepository might not do it)
+        sessions.sort(key=lambda s: s.started_at, reverse=True)
+        
+        possible_cache_dirs = []
+        for session in sessions:
+            if session.source_dir:
+                src_path = Path(session.source_dir).resolve()
+                derived_cache = src_path.parent / ".cache"
+                if derived_cache.exists():
+                    possible_cache_dirs.append(derived_cache)
+        
+        # Add default cache dir as fallback
+        possible_cache_dirs.append(Path(settings.cache_dir))
+        
+        # Try to find the file in possible cache directories
+        for cache_path in possible_cache_dirs:
+            file_path = cache_path / decoded_filename
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(file_path)
+                
+        # If not found in any cache, try if filename is an absolute path
+        if Path(decoded_filename).exists() and Path(decoded_filename).is_file():
+            return FileResponse(Path(decoded_filename))
+            
+        main_logger.error(f"Image not found: {decoded_filename}. Checked {len(possible_cache_dirs)} cache locations.")
         raise HTTPException(status_code=404, detail="Image not found")
         
-    if not file_path.is_file():
-        main_logger.error(f"Path is not a file: {file_path.absolute()}")
-        raise HTTPException(status_code=400, detail="Path is not a file")
-        
-    return FileResponse(file_path)
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        main_logger.error(f"Error serving image {decoded_filename}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # Mount static files for frontend (AFTER images mount)
 static_dir = Path(__file__).parent.parent / "web" / "frontend" / "dist"

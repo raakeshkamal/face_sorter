@@ -83,7 +83,7 @@ async def draw_bounding_box(
         await async_makedirs(str(output_path).rsplit("/", 1)[0], exist_ok=True)
 
         # Draw bounding box (PIL is blocking)
-        async def _draw():
+        def _draw():
             draw = ImageDraw.Draw(img)
             draw.rectangle(
                 [(bbox[0], bbox[1]), (bbox[2], bbox[3])],
@@ -126,7 +126,7 @@ async def crop_face(
         await async_makedirs(str(output_path).rsplit("/", 1)[0], exist_ok=True)
 
         # Crop and save (PIL is blocking)
-        async def _crop():
+        def _crop():
             width, height = img.size
             x1 = max(0, bbox[0] - padding)
             y1 = max(0, bbox[1] - padding)
@@ -175,7 +175,7 @@ async def is_valid_image(image_path: str) -> bool:
         img = await async_read_image(image_path)
 
         # Verify and load (PIL is blocking)
-        async def _verify():
+        def _verify():
             img.verify()
             # Need to reload after verify
             return Image.open(image_path)
@@ -207,7 +207,8 @@ async def convert_to_rgb(image_path: str, output_path: str) -> bool:
         await async_makedirs(str(output_path).rsplit("/", 1)[0], exist_ok=True)
 
         # Convert and save (PIL is blocking)
-        async def _convert():
+        def _convert():
+            nonlocal img
             if img.mode != "RGB":
                 img = img.convert("RGB")
             img.save(output_path, "JPEG", quality=95)

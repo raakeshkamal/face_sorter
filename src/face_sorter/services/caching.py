@@ -19,12 +19,13 @@ from face_sorter.utils.file_async import async_makedirs, async_read_image
 logger = logging.getLogger(__name__)
 
 
-async def compress_image(bkp: dict[str, Any], quality: int = 50) -> bool:
+async def compress_image(bkp: dict[str, Any], cache_dir: str, quality: int = 50) -> bool:
     """
     Compress and save an image to the cache.
 
     Args:
         bkp: Dictionary containing image path and cache URL.
+        cache_dir: Path to the cache directory.
         quality: JPEG quality (1-100).
 
     Returns:
@@ -33,15 +34,14 @@ async def compress_image(bkp: dict[str, Any], quality: int = 50) -> bool:
     try:
         img = await async_read_image(bkp["path"])
 
-        # Use settings.cache_dir and filename from bkp to construct output path
-        settings = get_settings()
+        # Use provided cache_dir and filename from bkp to construct output path
         filename = os.path.basename(bkp.get("cache_url") or bkp.get("item") or os.path.basename(bkp["path"]))
-        file_path = os.path.join(settings.cache_dir, filename)
+        file_path = os.path.join(cache_dir, filename)
         
         await async_makedirs(os.path.dirname(file_path), exist_ok=True)
 
         # Resize and save (PIL is blocking)
-        async def _compress(img_obj):
+        def _compress(img_obj):
             img_resized = img_obj.resize(img_obj.size, Image.Resampling.LANCZOS)
             img_resized.save(file_path, quality=quality, optimize=True)
 
@@ -116,7 +116,7 @@ async def build_cache(
         batch = unique_records[i : i + batch_size]
 
         # Create tasks for this batch
-        tasks = [compress_image(bkp, quality) for bkp in batch]
+        tasks = [compress_image(bkp, cache_dir, quality) for bkp in batch]
 
         # Process batch in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -141,18 +141,19 @@ async def build_cache(
 
 
 # Synchronous wrappers for backward compatibility
-def compress_image_sync(bkp: dict[str, Any], quality: int = 50) -> bool:
+def compress_image_sync(bkp: dict[str, Any], cache_dir: str, quality: int = 50) -> bool:
     """
     Synchronous wrapper for compress_image.
 
     Args:
         bkp: Dictionary containing image path and cache URL.
+        cache_dir: Path to the cache directory.
         quality: JPEG quality (1-100).
 
     Returns:
         True if successful, False otherwise.
     """
-    return asyncio.run(compress_image(bkp, quality))
+    return asyncio.run(compress_image(bkp, cache_dir, quality))
 
 
 def clear_and_recreate_cache_sync(cache_dir: str) -> None:

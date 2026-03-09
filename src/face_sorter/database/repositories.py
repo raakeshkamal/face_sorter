@@ -37,7 +37,17 @@ class FaceRepository:
                 self._db = await get_database()
             settings = get_settings()
             self._collection = self._db[settings.collection_backup]
+            # Ensure indexes exist
+            await self.create_indexes()
         return self._collection
+
+    async def create_indexes(self) -> None:
+        """Create necessary indexes for the collection."""
+        if self._collection is not None:
+            await self._collection.create_index([("idx", ASCENDING)], unique=True)
+            await self._collection.create_index([("path", ASCENDING)])
+            await self._collection.create_index([("item", ASCENDING)])
+            logger.debug("Indexes created for faces collection")
 
     async def insert_face(self, face_data: dict[str, Any]) -> None:
         """
@@ -173,7 +183,15 @@ class ClassRepository:
                 self._db = await get_database()
             settings = get_settings()
             self._collection = self._db[settings.collection_classes]
+            # Ensure indexes exist
+            await self.create_indexes()
         return self._collection
+
+    async def create_indexes(self) -> None:
+        """Create necessary indexes for the collection."""
+        if self._collection is not None:
+            await self._collection.create_index([("class", ASCENDING)])
+            logger.debug("Indexes created for classes collection")
 
     async def insert_class(self, class_name: str, embedding: list[float]) -> None:
         """
@@ -295,7 +313,15 @@ class ClusterRepository:
                 self._db = await get_database()
             settings = get_settings()
             self._collection = self._db[settings.collection_clusters]
+            # Ensure indexes exist
+            await self.create_indexes()
         return self._collection
+
+    async def create_indexes(self) -> None:
+        """Create necessary indexes for the collection."""
+        if self._collection is not None:
+            await self._collection.create_index([("cluster_id", ASCENDING)], unique=True)
+            logger.debug("Indexes created for clusters collection")
 
     async def insert_cluster(
         self,
@@ -424,7 +450,7 @@ async def fetch_data_optimized(
         sort=[("idx", ASCENDING)],
     )
 
-    count = await face_repo.count_faces()
+    count = len(face_docs)
     imgname = [None] * count
     imgpath = [None] * count
     imgcache = [None] * count

@@ -10,6 +10,8 @@ function Sorting() {
   const [form, setForm] = useState({
     source_dir: '',
     max_results: 10,
+    min_samples: 2,
+    min_cluster_size: 5,
   });
 
   const [operationStarted, setOperationStarted] = useState(false);
@@ -260,9 +262,39 @@ function Sorting() {
                   max="100"
                   placeholder="10"
                 />
-                <p className="form-help">Number of top clusters to display (1-100)</p>
+                <p className="form-help">Maximum number of clusters to show in preview.</p>
               </div>
-            </div>
+
+              <div className="form-group">
+                <label className="form-label">Min Cluster Size</label>
+                <input
+                  type="number"
+                  name="min_cluster_size"
+                  value={form.min_cluster_size}
+                  onChange={handleChange}
+                  className="form-input"
+                  min="2"
+                  max="100"
+                  placeholder="5"
+                />
+                <p className="form-help">Minimum number of faces to form a cluster.</p>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Min Samples</label>
+                <input
+                  type="number"
+                  name="min_samples"
+                  value={form.min_samples}
+                  onChange={handleChange}
+                  className="form-input"
+                  min="1"
+                  max="50"
+                  placeholder="2"
+                />
+                <p className="form-help">Lower values create more (potentially noisy) clusters.</p>
+              </div>
+              </div>
 
             <div className="info-box">
               <p className="info-text">
@@ -302,7 +334,7 @@ function Sorting() {
       {showResults && (
         <div className="results-section">
           <h2 className="results-title">Sorting Results</h2>
-          <div className="results-stats grid-3">
+          <div className="results-stats">
             <div className="stat-card card">
               <div className="stat-icon">👥</div>
               <div className="stat-value">{results.total_clusters}</div>
@@ -322,38 +354,48 @@ function Sorting() {
 
           <div className="clusters-section">
             <h3 className="section-title">Top Clusters</h3>
-            <div className="clusters-grid grid-4">
+            <div className="clusters-grid">
               {results.clusters.map((cluster) => (
                 <div key={cluster.id} className="cluster-card card">
                   <div className="cluster-header">
                     <span className="cluster-id">Cluster #{cluster.id}</span>
                     <span className="cluster-size">{cluster.size} faces</span>
                   </div>
-                  <div className="cluster-preview">
-                    <div className="cluster-images">
-                      {cluster.faces.map((face, index) => (
+                  <div className="cluster-preview collage">
+                    <div className="collage-main">
+                      {cluster.faces[0] && (
+                        <img
+                          src={getImageUrl(cluster.faces[0])}
+                          className="cluster-image main"
+                          loading="lazy"
+                          alt="Cluster main face"
+                        />
+                      )}
+                    </div>
+                    <div className="collage-side">
+                      {cluster.faces.slice(1, 4).map((face, index) => (
                         <img
                           key={index}
                           src={getImageUrl(face)}
-                          className="cluster-image"
+                          className="cluster-image side"
                           loading="lazy"
-                          alt="Cluster face"
+                          alt="Cluster side face"
                         />
                       ))}
                     </div>
                   </div>
                   <div className="cluster-actions">
                     <button className="btn btn-secondary" onClick={() => viewCluster(cluster)}>
-                      View Cluster
+                      🔍 View
                     </button>
                     <button className="btn btn-primary" onClick={() => assignToClass(cluster)}>
-                      Assign to Class
+                      🏷️ Assign
                     </button>
                   </div>
                 </div>
               ))}
             </div>
-            <div className="form-actions" style={{ justifyContent: 'center', marginTop: '40px' }}>
+            <div className="form-actions">
                <button className="btn btn-secondary" onClick={handleReset}>
                   Start New Sorting
                </button>
@@ -364,7 +406,7 @@ function Sorting() {
 
       {showGallery && (
         <div className="modal-backdrop" onClick={() => setShowGallery(false)}>
-          <div className="modal-content large" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content full-screen" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Cluster #{selectedCluster?.id} Gallery ({selectedCluster?.size} faces)</h2>
               <button className="modal-close" onClick={() => setShowGallery(false)}>✕</button>
