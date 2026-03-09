@@ -215,6 +215,9 @@ def match_faces_to_classes(
     imgembeddings_arr = np.asarray(imgembeddings, dtype=np.float32)
     classembeddings_arr = np.asarray(classembeddings, dtype=np.float32)
 
+    # Normalize image embeddings to ensure IP equals cosine similarity
+    faiss.normalize_L2(imgembeddings_arr)
+
     # Create FAISS index for classes
     if classembeddings_arr.shape[0] == 0:
         return [], [], imgembeddings, list(range(len(imgembeddings)))
@@ -277,19 +280,22 @@ def cluster_unknown_faces(
         min_samples = settings.cluster_min_samples
     if min_cluster_size is None:
         min_cluster_size = settings.cluster_min_size
+    
+    cluster_selection_epsilon = settings.cluster_selection_epsilon
 
     face_embeddings = np.array(unsorted_embeddings, dtype=np.float32)
     # Re-normalize just in case
     faiss.normalize_L2(face_embeddings)
 
     n_samples = face_embeddings.shape[0]
-    sample_threshold = 1000
+    # Increased sample threshold for better distribution representation
+    sample_threshold = 2000
 
     if n_samples > sample_threshold:
         logger.info(f"Dataset size {n_samples} is large. Using sampling (sample size: {sample_threshold})")
         # Randomly sample indices
         all_indices = np.arange(n_samples)
-        sampled_indices = np.random.choice(all_indices, sample_threshold, replace=False)
+        sampled_indices = np.random.choice(all_indices, min(n_samples, sample_threshold), replace=False)
         unsampled_mask = np.ones(n_samples, dtype=bool)
         unsampled_mask[sampled_indices] = False
         unsampled_indices = all_indices[unsampled_mask]
@@ -297,11 +303,12 @@ def cluster_unknown_faces(
         sampled_embeddings = face_embeddings[sampled_indices]
 
         # Fit HDBSCAN on the sampled faces
-        logger.info(f"Fitting HDBSCAN on {sample_threshold} sampled faces...")
+        logger.info(f"Fitting HDBSCAN on {len(sampled_indices)} sampled faces...")
         dbscan = HDBSCAN(
             metric="euclidean",
             min_samples=min_samples,
             min_cluster_size=min_cluster_size,
+            cluster_selection_epsilon=cluster_selection_epsilon,
             n_jobs=-1,
         )
         sampled_labels = dbscan.fit_predict(sampled_embeddings)
@@ -317,7 +324,7 @@ def cluster_unknown_faces(
             valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
             valid_sampled_labels = cluster_labels[valid_sampled_indices]
 
-            logger.info(f"Assigning remaining {n_samples - sample_threshold} faces to clusters using nearest neighbor...")
+            logger.info(f"Assigning remaining {n_samples - len(valid_sampled_indices)} faces to clusters using nearest neighbor...")
             
             # Use FAISS for efficient nearest neighbor search
             # We index the sampled points that belong to a cluster
@@ -337,8 +344,7 @@ def cluster_unknown_faces(
                 
                 # Assign labels of the nearest neighbors ONLY if distance is within threshold
                 # For normalized vectors, L2 distance squared d^2 = 2(1 - cosine_similarity)
-                # Similarity 0.6 => d^2 = 0.8
-                similarity_threshold = 0.6
+                similarity_threshold = settings.similarity_threshold
                 dist_threshold = 2 * (1 - similarity_threshold)
                 
                 # Reshape D and I to 1D
@@ -359,6 +365,7 @@ def cluster_unknown_faces(
             metric="euclidean",
             min_samples=min_samples,
             min_cluster_size=min_cluster_size,
+            cluster_selection_epsilon=cluster_selection_epsilon,
             n_jobs=-1,
         )
         cluster_labels = dbscan.fit_predict(face_embeddings)

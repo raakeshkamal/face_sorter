@@ -69,20 +69,25 @@ class Settings(BaseSettings):
         description="Quality setting for cached images (1-100)",
     )
     similarity_threshold: float = Field(
-        default=0.6,
+        default=0.75,
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for face matching",
     )
     cluster_min_samples: int = Field(
-        default=2,
+        default=3,
         ge=1,
         description="Minimum samples for HDBSCAN clustering",
     )
     cluster_min_size: int = Field(
-        default=5,
+        default=10,
         ge=1,
         description="Minimum cluster size for HDBSCAN clustering",
+    )
+    cluster_selection_epsilon: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Cluster selection epsilon for HDBSCAN",
     )
     batch_size: int = Field(
         default=32,
