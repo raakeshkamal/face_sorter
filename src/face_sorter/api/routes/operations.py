@@ -16,8 +16,9 @@ from pydantic import BaseModel
 
 from face_sorter.api.websocket.manager import connection_manager
 from face_sorter.database import SessionRepository
-from face_sorter.models.session import SessionStatus, SessionProgress, TrainingSession, TrainingCancelledError, CleaningCancelledError
+from face_sorter.models.session import SessionStatus, SessionProgress, TrainingSession, TrainingCancelledError, CleaningCancelledError, DeduplicationCancelledError
 from face_sorter.services.clean import clean_dataset
+from face_sorter.services.deduplication import build_dedup_cache
 from face_sorter.services.task_tracker import task_tracker
 from face_sorter.services.training import train
 from face_sorter.services.sorting import sort
@@ -47,6 +48,18 @@ class CleanRequest(BaseModel):
     quality: Optional[int] = None
     recursive: Optional[bool] = None
     start_index: Optional[int] = None
+
+
+class DedupRequest(BaseModel):
+    """Request model for deduplication operation."""
+
+    source_dir: Optional[str] = None
+    duplicates_dir: Optional[str] = None
+    dedup_threshold: Optional[float] = None
+    dedup_batch_size: Optional[int] = None
+    dedup_model_name: Optional[str] = None
+    dedup_cache_file: Optional[str] = None
+    dedup_force_recompute: bool = False
 
 
 class SortRequest(BaseModel):
@@ -268,7 +281,7 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
 
             await connection_manager.send_progress("cleaning", task_id, result.processed, result.processed, "Complete", "")
 
-        except asyncio.CancelledError:
+        except CleaningCancelledError:
             await session_repo.update_session(
                 task_id,
                 {
@@ -301,6 +314,130 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
     return OperationResponse(
         task_id=task_id,
         operation="cleaning",
+        status="started",
+    )
+
+
+@router.post("/deduplicate", response_model=OperationResponse)
+async def start_deduplicate(request: DedupRequest) -> OperationResponse:
+    """
+    Start deduplication operation in background.
+
+    Args:
+        request: Deduplication request with directories and options.
+
+    Returns:
+        Operation response with task_id for progress tracking.
+    """
+    task_id = str(uuid.uuid4())
+    source_dir = request.source_dir or ""
+
+    # Create session in database
+    session_repo = SessionRepository()
+    session = TrainingSession(
+        task_id=task_id,
+        operation_type="deduplicating",
+        status=SessionStatus.PENDING,
+        source_dir=source_dir,
+        config=request.model_dump(),
+        progress=SessionProgress(0, 0, "Initializing", "").to_dict(),
+        started_at=datetime.now(timezone.utc),
+    )
+    await session_repo.create_session(session)
+
+    # Create cancellation event
+    cancellation_event = asyncio.Event()
+
+    async def run_dedup_with_session():
+        """Run deduplication with session tracking."""
+        session_repo = SessionRepository()
+        try:
+            await session_repo.update_session(
+                task_id,
+                {"status": SessionStatus.RUNNING.value},
+            )
+
+            def dedup_progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+                """Handle progress updates during deduplication."""
+                asyncio.create_task(
+                    connection_manager.send_progress(
+                        "deduplicating", task_id, current, total, status, current_item
+                    )
+                )
+                asyncio.create_task(
+                    session_repo.update_session(
+                        task_id,
+                        {
+                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                        },
+                    )
+                )
+
+            from face_sorter.config import get_settings
+            from pathlib import Path
+            settings = get_settings()
+
+            source_dir = request.source_dir or settings.source_dir
+            derived_duplicates_dir = str(Path(source_dir).resolve().parent / "duplicates")
+
+            dedup_result = await build_dedup_cache(
+                source_dir=source_dir,
+                duplicates_dir=derived_duplicates_dir,
+                model_name=request.dedup_model_name or settings.dedup_model_name,
+                threshold=request.dedup_threshold if request.dedup_threshold is not None else settings.dedup_threshold,
+                batch_size=request.dedup_batch_size if request.dedup_batch_size is not None else settings.dedup_batch_size,
+                cache_file=request.dedup_cache_file or settings.dedup_cache_file,
+                force_recompute=request.dedup_force_recompute,
+                progress_callback=dedup_progress_handler,
+                cancellation_event=cancellation_event,
+            )
+
+            logger.info(f"Deduplication complete: {dedup_result.duplicate_groups} groups, {dedup_result.total_duplicates} duplicates")
+
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.COMPLETED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "progress": SessionProgress(dedup_result.total_images, dedup_result.total_images, "Complete", "").to_dict(),
+                },
+            )
+
+            await connection_manager.send_progress("deduplicating", task_id, dedup_result.total_images, dedup_result.total_images, "Complete", "")
+
+        except DeduplicationCancelledError:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.CANCELLED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            logger.info(f"Deduplication session {task_id} was cancelled")
+            await connection_manager.send_progress("deduplicating", task_id, 0, 0, "Cancelled", "")
+
+        except Exception as e:
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.FAILED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(e),
+                },
+            )
+            logger.error(f"Deduplication session {task_id} failed: {e}")
+            await connection_manager.send_progress("deduplicating", task_id, 0, 0, "Failed", str(e))
+
+        finally:
+            task_tracker.unregister_task(task_id)
+
+    # Create and register the task
+    task = asyncio.create_task(run_dedup_with_session())
+    task_tracker.register_task(task_id, task)
+
+    return OperationResponse(
+        task_id=task_id,
+        operation="deduplicating",
         status="started",
     )
 

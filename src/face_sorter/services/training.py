@@ -16,11 +16,16 @@ from typing import Any, Callable, Optional
 import cv2
 import psutil
 from insightface.app import FaceAnalysis
+import torch
 
 from face_sorter.config import get_settings
 from face_sorter.database.repositories import FaceRepository
 from face_sorter.models.face import FaceEmbedding, TrainingProgress
 from face_sorter.models.session import TrainingCancelledError
+from face_sorter.services.stability_score import (
+    evaluate_stability,
+    load_stability_model,
+)
 from face_sorter.utils.file_async import (
     async_file_exists,
     async_list_files,
@@ -202,6 +207,20 @@ async def train(
     app = FaceAnalysis(providers=settings.insightface_providers)
     app.prepare(ctx_id=0)
 
+    # Load stability score classification model
+    stability_model = None
+    stability_device = None
+    if settings.classification_model_name:
+        logger.info("Loading stability score classification model...")
+        try:
+            stability_model, stability_device = load_stability_model()
+            logger.info(f"Stability model loaded on device: {stability_device}")
+        except Exception as e:
+            logger.warning(f"Failed to load stability score model: {e}")
+            stability_model = None
+    else:
+        logger.info("Stability score detection disabled (no model configured)")
+
     # Get database connection
     face_repo = FaceRepository()
     bkpcollection = await face_repo._get_collection()
@@ -248,6 +267,23 @@ async def train(
         logger.info(f"Processing {i}/{total_files}: {item}")
         faces = await generate_embeddings(app, str(item_path), noface_dir)
 
+        # Calculate stability score (once per image, not per face)
+        stability_score = None
+        classification_result = None
+        content_probability = None
+
+        if stability_model is not None and stability_device is not None:
+            try:
+                stability_score, details = await evaluate_stability(
+                    stability_model,
+                    item_path,
+                    stability_device
+                )
+                classification_result = details.get('classification_result')
+                content_probability = details.get('content_probability')
+            except Exception as e:
+                logger.warning(f"Failed to calculate stability score for {item}: {e}")
+
         # Report progress
         if progress_callback and (i == 1 or i % 10 == 0 or i == total_files):
             status = "Processing images" if i < total_files else "Complete"
@@ -263,6 +299,13 @@ async def train(
                     "det_score": float(face.det_score),
                     "age": int(face.age),
                     "gender": int(face.gender),
+                })
+            # Add stability score if available
+            if stability_score is not None:
+                image_data.update({
+                    "stability_score": stability_score,
+                    "classification_result": classification_result,
+                    "content_probability": content_probability,
                 })
             progress_callback(i, total_files, status, item, image_data)
 
@@ -297,6 +340,9 @@ async def train(
                 landmark_2d_106=face.landmark_2d_106.tolist(),
                 embedding=face.embedding.tolist(),
                 cache_url=item,  # Just the filename, frontend handles URL construction
+                stability_score=stability_score,
+                classification_result=classification_result,
+                content_probability=content_probability,
             )
             await face_repo.insert_face(face_data.to_dict())
             count += 1

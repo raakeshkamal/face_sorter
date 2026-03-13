@@ -142,3 +142,9 @@ class CleaningCancelledError(Exception):
     """Exception raised when cleaning operation is cancelled."""
 
     pass
+
+
+class DeduplicationCancelledError(Exception):
+    """Exception raised when deduplication operation is cancelled."""
+
+    pass

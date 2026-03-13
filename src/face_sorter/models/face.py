@@ -42,6 +42,9 @@ class FaceEmbedding:
         landmark_2d_106: list[float],
         embedding: list[float],
         cache_url: str,
+        stability_score: Optional[float] = None,
+        classification_result: Optional[str] = None,
+        content_probability: Optional[float] = None,
     ) -> None:
         self.idx = idx
         self.item = item
@@ -56,10 +59,13 @@ class FaceEmbedding:
         self.landmark_2d_106 = landmark_2d_106
         self.embedding = embedding
         self.cache_url = cache_url
+        self.stability_score = stability_score
+        self.classification_result = classification_result
+        self.content_probability = content_probability
 
     def to_dict(self) -> dict:
         """Convert to dictionary for MongoDB storage."""
-        return {
+        data = {
             "idx": self.idx,
             "item": self.item,
             "path": self.path,
@@ -74,6 +80,14 @@ class FaceEmbedding:
             "embedding": self.embedding,
             "cache_url": self.cache_url,
         }
+        # Only include stability score fields if they are set
+        if self.stability_score is not None:
+            data["stability_score"] = self.stability_score
+        if self.classification_result is not None:
+            data["classification_result"] = self.classification_result
+        if self.content_probability is not None:
+            data["content_probability"] = self.content_probability
+        return data
 
 
 class FaceClass:

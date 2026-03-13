@@ -18,6 +18,7 @@ from face_sorter.utils.file_async import (
     async_list_files,
     async_makedirs,
     async_read_image,
+    async_move_file,
 )
 from face_sorter.utils.image import is_valid_image
 
@@ -78,6 +79,7 @@ async def scan_images(
 async def process_single_image(
     input_path: str,
     output_path: str,
+    broken_dir: str,
     quality: int = 95,
 ) -> bool:
     """
@@ -86,6 +88,7 @@ async def process_single_image(
     Args:
         input_path: Path to input image.
         output_path: Path to save processed image.
+        broken_dir: Directory for broken/invalid images.
         quality: JPEG quality (1-100).
 
     Returns:
@@ -95,6 +98,12 @@ async def process_single_image(
         # Validate image
         if not await is_valid_image(input_path):
             logger.warning(f"Invalid image: {input_path}")
+            # Move to broken directory
+            broken_path = str(Path(broken_dir) / Path(input_path).name)
+            try:
+                await async_move_file(input_path, broken_path)
+            except Exception as e:
+                logger.error(f"Failed to move broken image {input_path}: {e}")
             return False
 
         # Read image
@@ -105,7 +114,7 @@ async def process_single_image(
         await async_makedirs(str(Path(output_path_abs).parent), exist_ok=True)
 
         # Convert to RGB if needed (PIL is blocking)
-        async def _convert():
+        def _convert():
             if img.mode != "RGB":
                 rgb_img = img.convert("RGB")
             else:
@@ -117,12 +126,19 @@ async def process_single_image(
 
     except Exception as e:
         logger.error(f"Error processing {input_path}: {e}")
+        # Move to broken directory on read error
+        broken_path = str(Path(broken_dir) / Path(input_path).name)
+        try:
+            await async_move_file(input_path, broken_path)
+        except Exception as move_e:
+            logger.error(f"Failed to move broken image {input_path}: {move_e}")
         return False
 
 
 async def process_batch(
     batch: list[str],
     output_dir: str,
+    broken_dir: str,
     prefix: str,
     start_index: int,
     quality: int = 95,
@@ -133,6 +149,7 @@ async def process_batch(
     Args:
         batch: List of input image paths.
         output_dir: Output directory for processed images.
+        broken_dir: Directory for broken/invalid images.
         prefix: Filename prefix (e.g., "IMG").
         start_index: Starting index for naming.
         quality: JPEG quality (1-100).
@@ -155,7 +172,7 @@ async def process_batch(
     # Process batch in parallel
     results = await asyncio.gather(
         *[
-            process_single_image(input_path, output_path, quality)
+            process_single_image(input_path, output_path, broken_dir, quality)
             for input_path, output_path in tasks
         ],
         return_exceptions=True,
@@ -342,6 +359,7 @@ async def clean_dataset(
         batch_successful, batch_failed, next_index = await process_batch(
             batch,
             output_dir,
+            broken_dir,
             img_prefix,
             batch_start_index,
             quality,
@@ -385,7 +403,7 @@ async def clean_dataset(
         total=total,
         successful=successful,
         failed=failed,
-        moved_to_broken=0,  # Track if we implement moving broken files
+        moved_to_broken=failed,
         output_dir=output_dir,
         broken_dir=broken_dir,
         start_index=start_index,

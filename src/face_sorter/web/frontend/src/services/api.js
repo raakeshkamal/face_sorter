@@ -60,6 +60,11 @@ export const apiService = {
     return response.data;
   },
 
+  async startDeduplication(data) {
+    const response = await api.post("/operations/deduplicate", data);
+    return response.data;
+  },
+
   async startSorting(data) {
     const response = await api.post("/operations/sort", data);
     return response.data;

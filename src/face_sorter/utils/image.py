@@ -11,6 +11,8 @@ from typing import Optional, Tuple
 import numpy as np
 from PIL import Image, ImageDraw
 
+from .file_async import async_makedirs, async_read_image, async_write_image
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,8 +36,6 @@ async def compress_image(
     """
     try:
         # Read image asynchronously
-        from .file_async import async_read_image, async_makedirs
-
         img = await async_read_image(input_path)
 
         # Ensure output directory exists
@@ -75,8 +75,6 @@ async def draw_bounding_box(
         True if successful, False otherwise.
     """
     try:
-        from .file_async import async_makedirs, async_write_image
-
         img = await async_read_image(image_path)
 
         # Ensure output directory exists
@@ -118,8 +116,6 @@ async def crop_face(
         True if successful, False otherwise.
     """
     try:
-        from .file_async import async_makedirs
-
         img = await async_read_image(image_path)
 
         # Ensure output directory exists
@@ -174,11 +170,9 @@ async def is_valid_image(image_path: str) -> bool:
     try:
         img = await async_read_image(image_path)
 
-        # Verify and load (PIL is blocking)
+        # Verify (PIL is blocking)
         def _verify():
             img.verify()
-            # Need to reload after verify
-            return Image.open(image_path)
 
         await asyncio.to_thread(_verify)
         return True
@@ -199,8 +193,6 @@ async def convert_to_rgb(image_path: str, output_path: str) -> bool:
         True if successful, False otherwise.
     """
     try:
-        from .file_async import async_makedirs
-
         img = await async_read_image(image_path)
 
         # Ensure output directory exists

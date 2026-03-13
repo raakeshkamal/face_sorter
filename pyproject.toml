@@ -51,6 +51,8 @@ dev = [
     "black>=22.0",
     "mypy>=0.950",
     "ruff>=0.1.0",
+    "timm>=0.9.0",
+    "torchvision>=0.10",
 ]
 
 [project.scripts]

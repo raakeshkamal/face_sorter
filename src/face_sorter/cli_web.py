@@ -43,10 +43,14 @@ def web(host, port, dev):
     click.echo(f"  URL: http://{host}:{port}")
     click.echo("")
 
+    import os
+    src_dir = os.path.abspath("src")
+
     uvicorn.run(
         "face_sorter.api.main:app",
         host=host,
         port=port,
         reload=reload,
+        reload_dirs=[src_dir] if reload else None,
         log_level=log_level,
     )

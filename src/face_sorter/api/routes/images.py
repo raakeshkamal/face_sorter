@@ -25,6 +25,9 @@ class ImageResponse(BaseModel):
     det_score: float
     age: Optional[int] = None
     gender: Optional[int] = None
+    stability_score: Optional[float] = None
+    classification_result: Optional[str] = None
+    content_probability: Optional[float] = None
 
     @field_validator("bbox", mode="before")
     @classmethod
@@ -69,6 +72,9 @@ async def get_images(
         "det_score": 1,
         "age": 1,
         "gender": 1,
+        "stability_score": 1,
+        "classification_result": 1,
+        "content_probability": 1,
     }
 
     # Build query if cluster_id is provided
@@ -131,6 +137,9 @@ async def get_unsorted_images(
         "det_score": 1,
         "age": 1,
         "gender": 1,
+        "stability_score": 1,
+        "classification_result": 1,
+        "content_probability": 1,
     }
 
     # Query for faces without a class assignment

@@ -9,7 +9,7 @@ import glob
 import logging
 import os
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Callable
 
 import numpy as np
 import torch
@@ -31,6 +31,11 @@ Image.MAX_IMAGE_PIXELS = None
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 logger = logging.getLogger(__name__)
+
+
+class DeduplicationCancelledError(Exception):
+    """Exception raised when deduplication is cancelled."""
+    pass
 
 
 async def load_images(source_dir: str) -> List[str]:
@@ -87,6 +92,8 @@ async def compute_clip_embeddings(
     model_name: str = "openai/clip-vit-base-patch32",
     batch_size: int = 32,
     device: str = "cpu",
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> np.ndarray:
     """
     Compute CLIP embeddings for images in batches.
@@ -96,17 +103,26 @@ async def compute_clip_embeddings(
         model_name: CLIP model name.
         batch_size: Batch size for processing.
         device: Device to use (cpu, cuda, mps).
+        progress_callback: Optional callback for progress updates.
+        cancellation_event: Optional event for cancellation.
 
     Returns:
         Numpy array of embeddings.
+
+    Raises:
+        DeduplicationCancelledError: If cancellation is requested.
     """
     logger.info(f"Loading CLIP model: {model_name}...")
     model = CLIPModel.from_pretrained(model_name).to(device)
-    processor = CLIPProcessor.from_pretrained(model_name)
+    processor = CLIPProcessor.from_pretrained(model_name, use_fast=False)
 
     embeddings = []
 
-    for i in tqdm(range(0, len(image_files), batch_size), desc="Computing embeddings"):
+    for i in range(0, len(image_files), batch_size):
+        # Check for cancellation
+        if cancellation_event and cancellation_event.is_set():
+            raise DeduplicationCancelledError("Deduplication cancelled during embedding computation")
+
         batch_paths = image_files[i : i + batch_size]
         images = []
 
@@ -125,10 +141,35 @@ async def compute_clip_embeddings(
             inputs = processor(images=images, return_tensors="pt", padding=True).to(device)
             with torch.no_grad():
                 outputs = model.get_image_features(**inputs)
+                
+                # Handle different output types from transformers
+                if not isinstance(outputs, torch.Tensor):
+                    if hasattr(outputs, 'image_embeds') and getattr(outputs, 'image_embeds', None) is not None:
+                        outputs = outputs.image_embeds
+                    elif hasattr(outputs, 'pooler_output') and getattr(outputs, 'pooler_output', None) is not None:
+                        outputs = outputs.pooler_output
+                        if hasattr(model, 'visual_projection'):
+                            if outputs.shape[-1] == model.visual_projection.in_features:
+                                outputs = model.visual_projection(outputs)
+                    elif isinstance(outputs, tuple):
+                        outputs = outputs[0]
+                    else:
+                        outputs = outputs.last_hidden_state[:, 0, :]
+                        if hasattr(model, 'visual_projection'):
+                            if outputs.shape[-1] == model.visual_projection.in_features:
+                                outputs = model.visual_projection(outputs)
+                        
                 outputs = outputs / outputs.norm(p=2, dim=-1, keepdim=True)
                 embeddings.append(outputs.cpu().numpy())
         except Exception as e:
             logger.error(f"Error processing batch starting at {i}: {e}")
+
+        # Report progress
+        if progress_callback:
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(image_files) + batch_size - 1) // batch_size
+            current_file = batch_paths[0] if batch_paths else ""
+            progress_callback(i + batch_size, len(image_files), "Computing embeddings", current_file)
 
     if embeddings:
         return np.vstack(embeddings).astype(np.float32)
@@ -145,6 +186,8 @@ def find_duplicate_groups(
     embeddings: np.ndarray,
     threshold: float = 0.99,
     batch_size: int = 1000,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> List[Tuple[str, List[str]]]:
     """
     Find duplicates using PyTorch Matrix Multiplication.
@@ -154,9 +197,14 @@ def find_duplicate_groups(
         embeddings: Numpy array of embeddings.
         threshold: Similarity threshold (0-1).
         batch_size: Batch size for similarity computation.
+        progress_callback: Optional callback for progress updates.
+        cancellation_event: Optional event for cancellation.
 
     Returns:
         List of tuples (original_path, [duplicate_paths]).
+
+    Raises:
+        DeduplicationCancelledError: If cancellation is requested.
     """
     logger.info("Preparing for similarity search...")
     if len(embeddings) == 0:
@@ -190,7 +238,11 @@ def find_duplicate_groups(
 
     logger.info(f"Computing similarity matrix in batches (Threshold: {threshold})...")
 
-    for i in tqdm(range(0, num_images, batch_size), desc="Searching"):
+    for i in range(0, num_images, batch_size):
+        # Check for cancellation
+        if cancellation_event and cancellation_event.is_set():
+            raise DeduplicationCancelledError("Deduplication cancelled during duplicate search")
+
         end_idx = min(i + batch_size, num_images)
 
         query_chunk = embeddings_tensor[i:end_idx]
@@ -212,12 +264,10 @@ def find_duplicate_groups(
             group_indices = [m for m in matches if m not in visited]
 
             if len(group_indices) > 1:
-                cluster_files = [image_files[idx] for idx in group_indices]
-
                 scored_files = []
                 for idx in group_indices:
                     path = image_files[idx]
-                    quality = asyncio.run(get_image_quality(path))
+                    quality = _get_image_quality_sync(path)
                     scored_files.append((quality, path, idx))
 
                 scored_files.sort(key=lambda x: (x[0][0], x[0][1], [-ord(c) for c in x[1]]), reverse=True)
@@ -235,12 +285,21 @@ def find_duplicate_groups(
             elif len(group_indices) == 1:
                 visited.add(group_indices[0])
 
+        # Report progress
+        if progress_callback:
+            batch_num = (i // batch_size) + 1
+            total_batches = (num_images + batch_size - 1) // batch_size
+            current_file = image_files[min(i, len(image_files) - 1)] if image_files else ""
+            progress_callback(i + batch_size, num_images, "Searching duplicates", current_file)
+
     return duplicates
 
 
 async def move_duplicate_files(
     duplicates: List[Tuple[str, List[str]]],
     duplicates_dir: str,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> DuplicateMoveResult:
     """
     Move duplicate files to the duplicates directory.
@@ -248,9 +307,14 @@ async def move_duplicate_files(
     Args:
         duplicates: List of (original_path, [duplicate_paths]) tuples.
         duplicates_dir: Directory to move duplicates to.
+        progress_callback: Optional callback for progress updates.
+        cancellation_event: Optional event for cancellation.
 
     Returns:
         DuplicateMoveResult with statistics.
+
+    Raises:
+        DeduplicationCancelledError: If cancellation is requested.
     """
     # Create duplicates directory if it doesn't exist
     await async_makedirs(duplicates_dir, exist_ok=True)
@@ -261,16 +325,27 @@ async def move_duplicate_files(
 
     logger.info(f"Moving {total_duplicates} duplicate files to {duplicates_dir}...")
 
-    for original, duplicate_paths in tqdm(duplicates, desc="Moving duplicates"):
+    for idx, (original, duplicate_paths) in enumerate(duplicates):
+        # Check for cancellation
+        if cancellation_event and cancellation_event.is_set():
+            raise DeduplicationCancelledError("Deduplication cancelled during file moving")
+
         for dup_path in duplicate_paths:
             try:
-                # Create subdirectories based on original path
-                relative_path = Path(dup_path).relative_to(Path(original).parent.parent)
-                dest_path = os.path.join(duplicates_dir, str(relative_path))
+                # Move duplicates directly into the duplicates directory
+                dest_path = os.path.join(duplicates_dir, Path(dup_path).name)
 
                 # Ensure destination directory exists
                 dest_dir = os.path.dirname(dest_path)
                 await async_makedirs(dest_dir, exist_ok=True)
+                
+                # Handle filename collisions
+                counter = 1
+                while await async_file_exists(dest_path):
+                    name = Path(dup_path).stem
+                    ext = Path(dup_path).suffix
+                    dest_path = os.path.join(duplicates_dir, f"{name}_{counter}{ext}")
+                    counter += 1
 
                 # Move the file
                 await async_move_file(dup_path, dest_path)
@@ -278,6 +353,11 @@ async def move_duplicate_files(
             except Exception as e:
                 logger.error(f"Error moving {dup_path}: {e}")
                 failed += 1
+
+        # Report progress
+        if progress_callback:
+            current_file = original if original else ""
+            progress_callback(idx + 1, len(duplicates), "Moving duplicates", current_file)
 
     logger.info(f"Successfully moved {moved} duplicate files.")
     if failed > 0:
@@ -294,6 +374,8 @@ async def build_dedup_cache(
     batch_size: int = 32,
     cache_file: Optional[str] = None,
     force_recompute: bool = False,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> DeduplicationResult:
     """
     Build deduplication cache and move duplicate images.
@@ -306,9 +388,14 @@ async def build_dedup_cache(
         batch_size: Batch size for processing.
         cache_file: Path to cache embeddings.
         force_recompute: Force recompute embeddings even if cache exists.
+        progress_callback: Optional callback for progress updates.
+        cancellation_event: Optional event for cancellation.
 
     Returns:
         DeduplicationResult with statistics.
+
+    Raises:
+        DeduplicationCancelledError: If cancellation is requested.
     """
     # Determine device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -321,6 +408,10 @@ async def build_dedup_cache(
     image_files = await load_images(source_dir)
     total_images = len(image_files)
     logger.info(f"Found {total_images} images.")
+
+    # Report progress after loading images
+    if progress_callback:
+        progress_callback(total_images, total_images, "Found images", f"{total_images} images")
 
     if total_images == 0:
         return DeduplicationResult(
@@ -344,6 +435,10 @@ async def build_dedup_cache(
                 embeddings = cached_data
                 cache_loaded = True
                 logger.info("Cache loaded successfully.")
+
+                # Report progress after loading cache
+                if progress_callback:
+                    progress_callback(total_images, total_images, "Loaded cache from file", cache_file)
             else:
                 logger.info(f"Cache size ({len(cached_data)}) mismatch with found images ({total_images}). Recomputing...")
         except Exception as e:
@@ -351,7 +446,9 @@ async def build_dedup_cache(
             embeddings = None
 
     if embeddings is None:
-        embeddings = await compute_clip_embeddings(image_files, model_name, batch_size, device)
+        embeddings = await compute_clip_embeddings(
+            image_files, model_name, batch_size, device, progress_callback, cancellation_event
+        )
 
         if cache_file:
             logger.info(f"Saving embeddings to {cache_file}...")
@@ -362,7 +459,9 @@ async def build_dedup_cache(
                 logger.error(f"Could not save cache: {e}")
 
     # Find duplicates
-    duplicates = find_duplicate_groups(image_files, embeddings, threshold)
+    duplicates = find_duplicate_groups(
+        image_files, embeddings, threshold, batch_size, progress_callback, cancellation_event
+    )
 
     if duplicates:
         duplicate_groups = len(duplicates)
@@ -371,8 +470,14 @@ async def build_dedup_cache(
         logger.info(f"Found {duplicate_groups} duplicate groups with {total_duplicates} duplicate images.")
 
         # Move duplicates
-        move_result = await move_duplicate_files(duplicates, duplicates_dir)
+        move_result = await move_duplicate_files(
+            duplicates, duplicates_dir, progress_callback, cancellation_event
+        )
         moved_duplicates = move_result.moved
+
+        # Report completion
+        if progress_callback:
+            progress_callback(total_images, total_images, "Complete", f"Found {duplicate_groups} groups, {moved_duplicates} duplicates")
 
         return DeduplicationResult(
             total_images=total_images,
@@ -385,6 +490,11 @@ async def build_dedup_cache(
         )
     else:
         logger.info("No duplicates found.")
+
+        # Report completion with no duplicates
+        if progress_callback:
+            progress_callback(total_images, total_images, "Complete", "No duplicates found")
+
         return DeduplicationResult(
             total_images=total_images,
             duplicate_groups=0,
@@ -404,6 +514,8 @@ def deduplicate_sync(
     batch_size: Optional[int] = None,
     cache_file: Optional[str] = None,
     force_recompute: bool = False,
+    progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+    cancellation_event: Optional[asyncio.Event] = None,
 ) -> DeduplicationResult:
     """
     Synchronous wrapper for deduplication.
@@ -416,6 +528,8 @@ def deduplicate_sync(
         batch_size: Batch size for processing.
         cache_file: Path to cache embeddings.
         force_recompute: Force recompute embeddings even if cache exists.
+        progress_callback: Optional callback for progress updates.
+        cancellation_event: Optional event for cancellation.
 
     Returns:
         DeduplicationResult with statistics.
@@ -441,5 +555,7 @@ def deduplicate_sync(
             batch_size=batch_size,
             cache_file=cache_file,
             force_recompute=force_recompute,
+            progress_callback=progress_callback,
+            cancellation_event=cancellation_event,
         )
     )
