@@ -11,16 +11,27 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from face_sorter.api.websocket.manager import connection_manager
 from face_sorter.database import SessionRepository
-from face_sorter.models.session import SessionStatus, SessionProgress, TrainingSession, TrainingCancelledError, CleaningCancelledError, DeduplicationCancelledError
+from face_sorter.models.session import (
+    CleaningCancelledError,
+    DeduplicationCancelledError,
+    FaceDetectionTrainingCancelledError,
+    SessionProgress,
+    SessionStatus,
+    StabilityScoreTrainingCancelledError,
+    TrainingSession,
+)
 from face_sorter.services.clean import clean_dataset
 from face_sorter.services.deduplication import build_dedup_cache
 from face_sorter.services.task_tracker import task_tracker
-from face_sorter.services.training import train
+from face_sorter.services.training import (
+    train_face_detections,
+    train_stability_scores,
+)
 from face_sorter.services.sorting import sort
 
 logger = logging.getLogger(__name__)
@@ -80,10 +91,13 @@ class OperationResponse(BaseModel):
     status: str
 
 
-@router.post("/train", response_model=OperationResponse)
-async def start_train(request: TrainRequest) -> OperationResponse:
+@router.post("/train-stability", response_model=OperationResponse)
+async def start_train_stability(request: TrainRequest) -> OperationResponse:
     """
-    Start training operation in background.
+    Start stability score training operation in background.
+
+    This processes images and calculates stability scores only, without face detection.
+    Saves partial documents to MongoDB.
 
     Args:
         request: Training request with directories and options.
@@ -98,7 +112,7 @@ async def start_train(request: TrainRequest) -> OperationResponse:
     session_repo = SessionRepository()
     session = TrainingSession(
         task_id=task_id,
-        operation_type="training",
+        operation_type="training_stability",
         status=SessionStatus.PENDING,
         source_dir=source_dir,
         config=request.model_dump(),
@@ -110,8 +124,8 @@ async def start_train(request: TrainRequest) -> OperationResponse:
     # Create cancellation event
     cancellation_event = asyncio.Event()
 
-    async def run_training_with_session():
-        """Run training with session tracking."""
+    async def run_stability_training_with_session():
+        """Run stability training with session tracking."""
         session_repo = SessionRepository()
         try:
             # Update session to RUNNING
@@ -121,9 +135,9 @@ async def start_train(request: TrainRequest) -> OperationResponse:
             )
 
             def progress_handler(current: int, total: int, status_text: str, current_item: str, image_data: dict | None = None) -> None:
-                """Handle progress updates during training."""
+                """Handle progress updates during stability training."""
                 asyncio.create_task(
-                    connection_manager.send_progress("training", task_id, current, total, status_text, current_item, image_data)
+                    connection_manager.send_progress("training_stability", task_id, current, total, status_text, current_item, image_data)
                 )
                 # Also update session progress
                 asyncio.create_task(
@@ -135,11 +149,9 @@ async def start_train(request: TrainRequest) -> OperationResponse:
                     )
                 )
 
-            # Run training
-            result = await train(
+            # Run stability training
+            result = await train_stability_scores(
                 source_dir=request.source_dir,
-                noface_dir=request.noface_dir,
-                broken_dir=request.broken_dir,
                 cache_dir=request.cache_dir,
                 duplicates_dir=request.duplicates_dir,
                 progress_callback=progress_handler,
@@ -157,9 +169,9 @@ async def start_train(request: TrainRequest) -> OperationResponse:
             )
 
             # Send completion message via WebSocket
-            await connection_manager.send_progress("training", task_id, result.processed, result.total, "Complete", "")
+            await connection_manager.send_progress("training_stability", task_id, result.processed, result.total, "Complete", "")
 
-        except TrainingCancelledError:
+        except StabilityScoreTrainingCancelledError:
             # Update session to CANCELLED
             await session_repo.update_session(
                 task_id,
@@ -168,8 +180,8 @@ async def start_train(request: TrainRequest) -> OperationResponse:
                     "completed_at": datetime.now(timezone.utc),
                 },
             )
-            logger.info(f"Training session {task_id} was cancelled")
-            await connection_manager.send_progress("training", task_id, 0, 0, "Cancelled", "")
+            logger.info(f"Stability score training session {task_id} was cancelled")
+            await connection_manager.send_progress("training_stability", task_id, 0, 0, "Cancelled", "")
 
         except Exception as e:
             # Update session to FAILED
@@ -181,20 +193,141 @@ async def start_train(request: TrainRequest) -> OperationResponse:
                     "error": str(e),
                 },
             )
-            logger.error(f"Training session {task_id} failed: {e}")
-            await connection_manager.send_progress("training", task_id, 0, 0, "Failed", str(e))
+            logger.error(f"Stability score training session {task_id} failed: {e}")
+            await connection_manager.send_progress("training_stability", task_id, 0, 0, "Failed", str(e))
 
         finally:
             # Unregister task
             task_tracker.unregister_task(task_id)
 
     # Create and register the task
-    task = asyncio.create_task(run_training_with_session())
+    task = asyncio.create_task(run_stability_training_with_session())
     task_tracker.register_task(task_id, task)
 
     return OperationResponse(
         task_id=task_id,
-        operation="training",
+        operation="training_stability",
+        status="started",
+    )
+
+
+@router.post("/train-faces", response_model=OperationResponse)
+async def start_train_faces(request: TrainRequest) -> OperationResponse:
+    """
+    Start face detection training operation in background.
+
+    This processes images and detects faces, merging with existing stability scores.
+    Moves images without faces to noface directory.
+
+    Args:
+        request: Training request with directories and options.
+
+    Returns:
+        Operation response with task_id for progress tracking.
+    """
+    task_id = str(uuid.uuid4())
+    source_dir = request.source_dir or ""
+
+    # Create session in database
+    session_repo = SessionRepository()
+    session = TrainingSession(
+        task_id=task_id,
+        operation_type="training_faces",
+        status=SessionStatus.PENDING,
+        source_dir=source_dir,
+        config=request.model_dump(),
+        progress=SessionProgress(0, 0, "Initializing", "").to_dict(),
+        started_at=datetime.now(timezone.utc),
+    )
+    await session_repo.create_session(session)
+
+    # Create cancellation event
+    cancellation_event = asyncio.Event()
+
+    async def run_face_detection_with_session():
+        """Run face detection training with session tracking."""
+        session_repo = SessionRepository()
+        try:
+            # Update session to RUNNING
+            await session_repo.update_session(
+                task_id,
+                {"status": SessionStatus.RUNNING.value},
+            )
+
+            def progress_handler(current: int, total: int, status_text: str, current_item: str, image_data: dict | None = None) -> None:
+                """Handle progress updates during face detection training."""
+                asyncio.create_task(
+                    connection_manager.send_progress("training_faces", task_id, current, total, status_text, current_item, image_data)
+                )
+                # Also update session progress
+                asyncio.create_task(
+                    session_repo.update_session(
+                        task_id,
+                        {
+                            "progress": SessionProgress(current, total, status_text, current_item).to_dict(),
+                        },
+                    )
+                )
+
+            # Run face detection training
+            result = await train_face_detections(
+                source_dir=request.source_dir,
+                noface_dir=request.noface_dir,
+                cache_dir=request.cache_dir,
+                duplicates_dir=request.duplicates_dir,
+                progress_callback=progress_handler,
+                cancellation_event=cancellation_event,
+            )
+
+            # Update session to COMPLETED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.COMPLETED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "progress": SessionProgress(result.processed, result.total, "Complete", "").to_dict(),
+                },
+            )
+
+            # Send completion message via WebSocket
+            await connection_manager.send_progress("training_faces", task_id, result.processed, result.total, "Complete", "")
+
+        except FaceDetectionTrainingCancelledError:
+            # Update session to CANCELLED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.CANCELLED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            logger.info(f"Face detection training session {task_id} was cancelled")
+            await connection_manager.send_progress("training_faces", task_id, 0, 0, "Cancelled", "")
+
+        except Exception as e:
+            # Update session to FAILED
+            await session_repo.update_session(
+                task_id,
+                {
+                    "status": SessionStatus.FAILED.value,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error": str(e),
+                },
+            )
+            logger.error(f"Face detection training session {task_id} failed: {e}")
+            await connection_manager.send_progress("training_faces", task_id, 0, 0, "Failed", str(e))
+
+        finally:
+            # Unregister task
+            task_tracker.unregister_task(task_id)
+
+    # Create and register the task
+    task = asyncio.create_task(run_face_detection_with_session())
+    task_tracker.register_task(task_id, task)
+
+    return OperationResponse(
+        task_id=task_id,
+        operation="training_faces",
         status="started",
     )
 

@@ -50,8 +50,13 @@ export const apiService = {
   },
 
   // Operations
-  async startTraining(data) {
-    const response = await api.post("/operations/train", data);
+  async startStabilityTraining(data) {
+    const response = await api.post("/operations/train-stability", data);
+    return response.data;
+  },
+
+  async startFaceDetectionTraining(data) {
+    const response = await api.post("/operations/train-faces", data);
     return response.data;
   },
 

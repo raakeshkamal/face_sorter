@@ -117,9 +117,13 @@ class Settings(BaseSettings):
     )
 
     # Model Settings
-    classification_model_name: Optional[str] = Field(
+    stability_onnx_model_path: Optional[str] = Field(
         default=None,
-        description="Hugging Face classification model name for stability score detection",
+        description="Path to ONNX model file for stability score detection",
+    )
+    stability_model_name: Optional[str] = Field(
+        default=None,
+        description="Hugging Face model ID for processor",
     )
     insightface_providers: list[str] = Field(
         default_factory=lambda: ["CoreMLExecutionProvider", "CPUExecutionProvider"],

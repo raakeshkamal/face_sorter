@@ -19,7 +19,11 @@ from face_sorter.services.sorting import (
     remove_class_sync,
     sort_sync,
 )
-from face_sorter.services.training import train_sync
+from face_sorter.services.training import (
+    train_face_detections_sync,
+    train_stability_scores_sync,
+    train_sync,
+)
 from face_sorter.utils.logging import setup_logging
 
 # Set up logging
@@ -51,6 +55,41 @@ def train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir):
     logger.info("Starting training...")
     progress = train_sync(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir)
     logger.info(f"Training complete. Processed {progress.processed} images")
+    logger.info(f"  With faces: {progress.with_faces}")
+    logger.info(f"  Without faces: {progress.without_faces}")
+
+
+@cli.command("train-stability")
+@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
+@click.option("--cache-dir", type=click.Path(), help="Cache directory")
+@click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)")
+def train_stability_cli(source_dir, cache_dir, duplicates_dir):
+    """
+    Train stability scores only.
+
+    This processes all images in the source directory, calculates stability scores,
+    and saves partial documents to MongoDB. Does not perform face detection.
+    """
+    logger.info("Starting stability score training...")
+    progress = train_stability_scores_sync(source_dir, cache_dir, duplicates_dir)
+    logger.info(f"Stability score training complete. Processed {progress.processed} images")
+
+
+@cli.command("train-faces")
+@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
+@click.option("--noface-dir", type=click.Path(), help="Directory for images without faces")
+@click.option("--cache-dir", type=click.Path(), help="Cache directory")
+@click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)")
+def train_faces_cli(source_dir, noface_dir, cache_dir, duplicates_dir):
+    """
+    Train face detection only. Merges with existing stability scores if present.
+
+    This processes all images in the source directory, detects faces using InsightFace,
+    and merges with existing stability scores. Moves images without faces to noface directory.
+    """
+    logger.info("Starting face detection training...")
+    progress = train_face_detections_sync(source_dir, noface_dir, cache_dir, duplicates_dir)
+    logger.info(f"Face detection training complete. Processed {progress.processed} images")
     logger.info(f"  With faces: {progress.with_faces}")
     logger.info(f"  Without faces: {progress.without_faces}")
 

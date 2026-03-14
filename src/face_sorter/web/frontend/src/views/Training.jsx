@@ -12,9 +12,12 @@ function Training() {
   });
 
   const [operationStarted, setOperationStarted] = useState(false);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [stabilityComplete, setStabilityComplete] = useState(false);
   const [taskId, setTaskId] = useState('');
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [operationType, setOperationType] = useState(''); // 'training_stability' or 'training_faces'
 
   // Progress state
   const [current, setCurrent] = useState(0);
@@ -37,28 +40,57 @@ function Training() {
     const checkActiveSession = async () => {
       try {
         const activeSessions = await apiService.getActiveSessions();
-        const trainingSession = activeSessions.find(s => s.operation_type === 'training');
-        if (trainingSession) {
+        const stabilitySession = activeSessions.find(s => s.operation_type === 'training_stability');
+        const facesSession = activeSessions.find(s => s.operation_type === 'training_faces');
+
+        if (stabilitySession) {
+          setOperationType('training_stability');
           // Only reconnect WebSocket for sessions with status 'running'
-          if (trainingSession.status === 'running') {
-            setTaskId(trainingSession.task_id);
+          if (stabilitySession.status === 'running') {
+            setTaskId(stabilitySession.task_id);
             setOperationStarted(true);
+            setCurrentStep(1);
 
             // Restore progress from session
-            if (trainingSession.progress) {
-              setCurrent(trainingSession.progress.current || 0);
-              setTotal(trainingSession.progress.total || 0);
-              setCurrentStatus(trainingSession.progress.status || '');
-              setCurrentItem(trainingSession.progress.current_item || '');
+            if (stabilitySession.progress) {
+              setCurrent(stabilitySession.progress.current || 0);
+              setTotal(stabilitySession.progress.total || 0);
+              setCurrentStatus(stabilitySession.progress.status || '');
+              setCurrentItem(stabilitySession.progress.current_item || '');
             }
 
             setStatus('active');
 
             // Reconnect to WebSocket only for running sessions
-            websocketService.connect('training', trainingSession.task_id, handleMessage, handleError);
+            websocketService.connect('training_stability', stabilitySession.task_id, handleMessage, handleError);
           } else {
             // Session is cancelled, completed, or failed - don't reconnect
-            console.log(`Session ${trainingSession.task_id} has status ${trainingSession.status}, not reconnecting`);
+            console.log(`Session ${stabilitySession.task_id} has status ${stabilitySession.status}, not reconnecting`);
+          }
+        } else if (facesSession) {
+          setOperationType('training_faces');
+          // Only reconnect WebSocket for sessions with status 'running'
+          if (facesSession.status === 'running') {
+            setTaskId(facesSession.task_id);
+            setOperationStarted(true);
+            setCurrentStep(2);
+            setStabilityComplete(true);
+
+            // Restore progress from session
+            if (facesSession.progress) {
+              setCurrent(facesSession.progress.current || 0);
+              setTotal(facesSession.progress.total || 0);
+              setCurrentStatus(facesSession.progress.status || '');
+              setCurrentItem(facesSession.progress.current_item || '');
+            }
+
+            setStatus('active');
+
+            // Reconnect to WebSocket only for running sessions
+            websocketService.connect('training_faces', facesSession.task_id, handleMessage, handleError);
+          } else {
+            // Session is cancelled, completed, or failed - don't reconnect
+            console.log(`Session ${facesSession.task_id} has status ${facesSession.status}, not reconnecting`);
           }
         }
       } catch (error) {
@@ -118,8 +150,8 @@ function Training() {
         setCurrentStatus(data.progress.status);
         setCurrentItem(data.progress.current_item || '');
 
-        // Handle image data for carousel (only display images with faces)
-        if (data.progress.image_data && data.progress.image_data.det_score !== undefined && !isCarouselPaused) {
+        // Handle image data for carousel (display for both stability and face training)
+        if (data.progress.image_data && !isCarouselPaused) {
           setImages((prevImages) => {
             const newImage = data.progress.image_data;
             // Check if this image is already in our list
@@ -149,12 +181,16 @@ function Training() {
       case 'complete':
         setCurrentStatus('Complete');
         setStatus('complete');
+        // If stability training completed, mark it as complete
+        if (operationType === 'training_stability') {
+          setStabilityComplete(true);
+        }
         break;
 
       case 'error':
         setCurrentStatus('Failed');
         setStatus('failed');
-        window.alert(`Training failed: ${data.error.message || 'Unknown error'}`);
+        window.alert(`${operationType === 'training_stability' ? 'Stability score' : 'Face detection'} training failed: ${data.error.message || 'Unknown error'}`);
         break;
       default:
         break;
@@ -166,19 +202,42 @@ function Training() {
     window.alert('WebSocket connection error. Progress updates may not be available.');
   };
 
-  const startTraining = async (e) => {
+  const startStabilityTraining = async (e) => {
     e.preventDefault();
     try {
       setLoading(true);
       setStatus('active');
-      const response = await apiService.startTraining(form);
+      setOperationType('training_stability');
+      const response = await apiService.startStabilityTraining({ source_dir: form.source_dir });
       setTaskId(response.task_id);
       setOperationStarted(true);
+      setCurrentStep(1);
 
-      websocketService.connect('training', response.task_id, handleMessage, handleError);
+      websocketService.connect('training_stability', response.task_id, handleMessage, handleError);
     } catch (error) {
-      console.error('Failed to start training:', error);
-      window.alert('Failed to start training. Please check your configuration and try again.');
+      console.error('Failed to start stability training:', error);
+      window.alert('Failed to start stability training. Please check your configuration and try again.');
+      setStatus('idle');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startFaceDetectionTraining = async (e) => {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      setStatus('active');
+      setOperationType('training_faces');
+      const response = await apiService.startFaceDetectionTraining(form);
+      setTaskId(response.task_id);
+      setOperationStarted(true);
+      setCurrentStep(2);
+
+      websocketService.connect('training_faces', response.task_id, handleMessage, handleError);
+    } catch (error) {
+      console.error('Failed to start face detection training:', error);
+      window.alert('Failed to start face detection training. Please check your configuration and try again.');
       setStatus('idle');
     } finally {
       setLoading(false);
@@ -222,6 +281,7 @@ function Training() {
   const handleReset = () => {
     websocketService.disconnect();
     setOperationStarted(false);
+    setOperationType('');
     setTaskId('');
     setCurrent(0);
     setTotal(0);
@@ -243,39 +303,130 @@ function Training() {
       {!operationStarted ? (
         <div className="training-form card">
           <h2 className="form-title">Training Configuration</h2>
-          <form onSubmit={startTraining}>
-            <div className="form-grid grid-1">
-              <div className="form-group">
-                <label className="form-label">Source Directory</label>
-                <div className="input-with-browse">
-                  <input
-                    type="text"
-                    name="source_dir"
-                    value={form.source_dir}
-                    onChange={handleChange}
-                    className="form-input"
-                    placeholder="/path/to/images"
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="browse-btn"
-                    onClick={() => openFolderPicker('source_dir')}
-                  >
-                    📁 Browse
-                  </button>
-                </div>
-                <p className="form-help">Directory containing images to process. Other required directories will be created automatically in the same parent folder.</p>
-              </div>
-            </div>
 
-            <div className="form-actions">
-              <button type="submit" className="btn btn-primary btn-large" disabled={loading}>
-                <span className="btn-icon">🎯</span>
-                <span>{loading ? 'Starting...' : 'Start Training'}</span>
+          {/* Step Indicator */}
+          <div className="step-indicator">
+            <div className={`step ${currentStep === 1 ? 'active' : ''} ${stabilityComplete ? 'complete' : ''}`}>
+              <div className="step-number">
+                {stabilityComplete ? '✓' : '1'}
+              </div>
+              <div className="step-label">Stability Scores</div>
+            </div>
+            <div className="step-divider"></div>
+            <div className={`step ${currentStep === 2 ? 'active' : ''}`}>
+              <div className="step-number">2</div>
+              <div className="step-label">Face Detection</div>
+            </div>
+          </div>
+
+          {/* Step 1: Stability Score Training */}
+          {currentStep === 1 && (
+            <form onSubmit={startStabilityTraining}>
+              <div className="form-grid grid-1">
+                <div className="form-group">
+                  <label className="form-label">Source Directory</label>
+                  <div className="input-with-browse">
+                    <input
+                      type="text"
+                      name="source_dir"
+                      value={form.source_dir}
+                      onChange={handleChange}
+                      className="form-input"
+                      placeholder="/path/to/images"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="browse-btn"
+                      onClick={() => openFolderPicker('source_dir')}
+                    >
+                      📁 Browse
+                    </button>
+                  </div>
+                  <p className="form-help">Directory containing images to process.</p>
+                </div>
+              </div>
+
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary btn-large" disabled={loading}>
+                  <span className="btn-icon">🎯</span>
+                  <span>{loading ? 'Starting...' : 'Start Stability Training'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Step 2: Face Detection Training */}
+          {currentStep === 2 && (
+            <form onSubmit={startFaceDetectionTraining}>
+              <div className="form-grid grid-1">
+                <div className="form-group">
+                  <label className="form-label">Source Directory</label>
+                  <div className="input-with-browse">
+                    <input
+                      type="text"
+                      name="source_dir"
+                      value={form.source_dir}
+                      onChange={handleChange}
+                      className="form-input"
+                      placeholder="/path/to/images"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="browse-btn"
+                      onClick={() => openFolderPicker('source_dir')}
+                    >
+                      📁 Browse
+                    </button>
+                  </div>
+                  <p className="form-help">Directory containing images to process.</p>
+                </div>
+              </div>
+
+              <div className="step-navigation">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setCurrentStep(1)}
+                >
+                  ← Back to Stability Scores
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-large"
+                  disabled={loading}
+                >
+                  <span className="btn-icon">🎯</span>
+                  <span>{loading ? 'Starting...' : 'Start Face Detection Training'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Step Navigation Buttons */}
+          {currentStep === 1 && !stabilityComplete && (
+            <div className="step-navigation">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setCurrentStep(2)}
+              >
+                Skip to Face Detection →
               </button>
             </div>
-          </form>
+          )}
+          {currentStep === 1 && stabilityComplete && (
+            <div className="step-navigation">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setCurrentStep(2)}
+              >
+                Proceed to Face Detection →
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="progress-section">
@@ -293,7 +444,7 @@ function Training() {
 
           {/* Progress bar for detailed information */}
           <ProgressBar
-            operationType="Training"
+            operationType={operationType === 'training_stability' ? 'Stability Score Training' : 'Face Detection Training'}
             taskId={taskId}
             current={current}
             total={total}
@@ -321,16 +472,24 @@ function Training() {
         <h3 className="info-title">About Training</h3>
         <div className="info-content">
           <p className="info-paragraph">
-            <strong>Training</strong> performs face detection on your images using
-            InsightFace and generates 512-dimensional face embeddings that can be used
-            for recognition and clustering.
+            <strong>Training</strong> is a two-step process that processes your images for face detection and stability scoring.
           </p>
+
+          <h4 className="info-subtitle">Step 1: Stability Scores</h4>
           <ul className="info-list">
-            <li>✅ Detects faces in images</li>
+            <li>✅ Calculates stability scores for each image</li>
+            <li>✅ Classifies images (face/other)</li>
+            <li>✅ Extracts content probability</li>
+            <li>✅ Saves partial documents to MongoDB</li>
+          </ul>
+
+          <h4 className="info-subtitle">Step 2: Face Detection</h4>
+          <ul className="info-list">
+            <li>✅ Detects faces in images using InsightFace</li>
             <li>✅ Generates 512-dim embeddings</li>
             <li>✅ Extracts face metadata (age, gender, landmarks)</li>
+            <li>✅ Merges with existing stability scores</li>
             <li>✅ Moves images without faces to noface directory</li>
-            <li>✅ Automatically creates required directories in the same parent</li>
             <li>✅ Real-time progress tracking</li>
           </ul>
         </div>

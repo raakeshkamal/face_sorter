@@ -162,6 +162,58 @@ class FaceRepository:
             {"$unset": {"cluster": ""}}
         )
 
+    async def upsert_face_by_item(self, item: str, face_data: dict[str, Any]) -> None:
+        """
+        Update or insert a face document by item using upsert.
+
+        Args:
+            item: The item identifier (filename).
+            face_data: Dictionary containing face information to update/insert.
+        """
+        collection = await self._get_collection()
+        await collection.update_one(
+            {"item": item},
+            {"$set": face_data},
+            upsert=True
+        )
+
+    async def exists_by_item(self, item: str) -> bool:
+        """
+        Check if a document exists for a given item.
+
+        Args:
+            item: The item identifier (filename).
+
+        Returns:
+            True if a document exists, False otherwise.
+        """
+        collection = await self._get_collection()
+        doc = await collection.find_one({"item": item}, projection={"_id": 1})
+        return doc is not None
+
+    async def get_stability_score_by_item(self, item: str) -> Optional[dict[str, Any]]:
+        """
+        Retrieve stability score fields for an image by item.
+
+        Args:
+            item: The item identifier (filename).
+
+        Returns:
+            Dictionary with stability_score, classification_result, and content_probability fields,
+            or None if not found.
+        """
+        collection = await self._get_collection()
+        doc = await collection.find_one(
+            {"item": item},
+            projection={
+                "stability_score": 1,
+                "classification_result": 1,
+                "content_probability": 1,
+                "_id": 0
+            }
+        )
+        return doc
+
 
 class ClassRepository:
     """Repository for managing face classes."""
