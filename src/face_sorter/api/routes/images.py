@@ -29,6 +29,9 @@ class ImageResponse(BaseModel):
     centroid_similarity: Optional[float] = Field(
         default=None, description="Similarity to cluster centroid"
     )
+    cluster_method: Optional[str] = Field(
+        default=None, description="Clustering method used (hdbscan or faiss)"
+    )
     age: Optional[int] = None
     gender: Optional[int] = None
     stability_score: Optional[float] = None
@@ -79,6 +82,7 @@ async def get_images(
         "det_score": 1,
         "match_similarity": 1,
         "centroid_similarity": 1,
+        "cluster_method": 1,
         "age": 1,
         "gender": 1,
         "stability_score": 1,
@@ -146,6 +150,7 @@ async def get_unsorted_images(
         "det_score": 1,
         "match_similarity": 1,
         "centroid_similarity": 1,
+        "cluster_method": 1,
         "age": 1,
         "gender": 1,
         "stability_score": 1,

@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './ImageGallery.css';
 
 function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', onImageClick }) {
   const [selectedIndex, setSelectedIndex] = useState(null);
+  const [imgDims, setImgDims] = useState({ width: 0, height: 0, naturalWidth: 0, naturalHeight: 0 });
+  const imgRef = useRef(null);
 
   const getImageUrl = useCallback((image) => {
     if (!image) return '';
@@ -33,6 +35,31 @@ function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', 
     if (selectedIndex !== null && selectedIndex > 0) {
       setSelectedIndex(selectedIndex - 1);
     }
+  }, [selectedIndex]);
+
+  const handleImageLoad = (e) => {
+    const img = e.target;
+    setImgDims({
+      width: img.clientWidth,
+      height: img.clientHeight,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight
+    });
+  };
+
+  // Update dimensions on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (imgRef.current) {
+        setImgDims(prev => ({
+          ...prev,
+          width: imgRef.current.clientWidth,
+          height: imgRef.current.clientHeight
+        }));
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, [selectedIndex]);
 
   useEffect(() => {
@@ -72,6 +99,23 @@ function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', 
 
   const selectedImage = selectedIndex !== null ? images[selectedIndex] : null;
 
+  // Calculate Bbox style
+  const getBboxStyle = () => {
+    if (!selectedImage || !selectedImage.bbox || imgDims.naturalWidth === 0) return { display: 'none' };
+    
+    const [x1, y1, x2, y2] = selectedImage.bbox;
+    const scaleX = imgDims.width / imgDims.naturalWidth;
+    const scaleY = imgDims.height / imgDims.naturalHeight;
+
+    return {
+      left: `${x1 * scaleX}px`,
+      top: `${y1 * scaleY}px`,
+      width: `${(x2 - x1) * scaleX}px`,
+      height: `${(y2 - y1) * scaleY}px`,
+      display: 'block'
+    };
+  };
+
   return (
     <div className="gallery-wrapper">
       {selectedIndex === null ? (
@@ -80,7 +124,7 @@ function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', 
             {images.map((image, index) => (
               <div
                 key={image.idx || image.filename || index}
-                className="image-card"
+                className={`image-card ${image.cluster_method || ''}`}
                 onClick={() => handleImageClick(image, index)}
               >
                 <img
@@ -129,11 +173,16 @@ function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', 
 
             <div className="focus-center-box">
               <div className="focus-image-container">
-                <img
-                  src={getImageUrl(selectedImage)}
-                  alt={selectedImage.filename}
-                  className="focus-image"
-                />
+                <div className="focus-image-wrapper">
+                  <img
+                    ref={imgRef}
+                    src={getImageUrl(selectedImage)}
+                    alt={selectedImage.filename}
+                    className="focus-image"
+                    onLoad={handleImageLoad}
+                  />
+                  <div className="face-bbox" style={getBboxStyle()}></div>
+                </div>
               </div>
 
               <div className="focus-details-card">

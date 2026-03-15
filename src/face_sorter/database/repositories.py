@@ -173,6 +173,21 @@ class FaceRepository:
         if update_doc:
             await collection.update_one({"idx": face_idx}, {"$set": update_doc})
 
+    async def update_cluster_method(
+        self,
+        face_idx: int,
+        cluster_method: str,
+    ) -> None:
+        """
+        Update the clustering method used for a face.
+
+        Args:
+            face_idx: Face index (database idx field).
+            cluster_method: Clustering method used ("hdbscan" or "faiss").
+        """
+        collection = await self._get_collection()
+        await collection.update_one({"idx": face_idx}, {"$set": {"cluster_method": cluster_method}})
+
     async def clear_all_clusters(self) -> None:
         """Remove cluster labels from all faces."""
         collection = await self._get_collection()

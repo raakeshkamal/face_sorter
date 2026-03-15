@@ -262,7 +262,7 @@ def cluster_unknown_faces(
     imgstabilityscores: list[Optional[float]],
     min_samples: Optional[int] = None,
     min_cluster_size: Optional[int] = None,
-) -> tuple[np.ndarray, np.ndarray, dict[int, float], dict[int, float]]:
+) -> tuple[np.ndarray, np.ndarray, dict[int, float], dict[int, float], dict[int, str]]:
     """
     Cluster unknown faces using HDBSCAN with stability-based sampling.
 
@@ -278,9 +278,11 @@ def cluster_unknown_faces(
             - centers_arr: Cluster centroids
             - cluster_similarities: Average intra-cluster similarities
             - centroid_similarities: Per-face similarity to cluster centroid
+            - cluster_methods: Dictionary mapping face index to clustering method
+              ("hdbscan" or "faiss")
     """
     if not unsorted_embeddings:
-        return np.array([]), np.array([]), {}, {}
+        return np.array([]), np.array([]), {}, {}, {}
 
     settings = get_settings()
     if min_samples is None:
@@ -296,6 +298,9 @@ def cluster_unknown_faces(
     n_samples = face_embeddings.shape[0]
     sample_threshold = 2000
 
+    # Track which faces were assigned by HDBSCAN vs FAISS
+    cluster_methods: dict[int, str] = {}
+
     # Path C: Small dataset (<2000 total) - run HDBSCAN on all
     if n_samples <= sample_threshold:
         logger.info(f"Running HDBSCAN on all {n_samples} faces...")
@@ -307,6 +312,11 @@ def cluster_unknown_faces(
             n_jobs=-1,
         )
         cluster_labels = dbscan.fit_predict(face_embeddings)
+
+        # All clustered faces in this path are assigned by HDBSCAN
+        for i in range(n_samples):
+            if cluster_labels[i] != -1:
+                cluster_methods[i] = "hdbscan"
     else:
         # Identify unstable faces (stability score > 0.5)
         unstable_mask = np.array(
@@ -354,6 +364,10 @@ def cluster_unknown_faces(
                 valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
                 valid_sampled_labels = cluster_labels[valid_sampled_indices]
 
+                # Track HDBSCAN assignments (sampled faces with valid clusters)
+                for idx in valid_sampled_indices:
+                    cluster_methods[idx] = "hdbscan"
+
                 logger.info(
                     f"Assigning remaining {n_samples - len(valid_sampled_indices)} "
                     "faces to clusters using nearest neighbor..."
@@ -379,6 +393,11 @@ def cluster_unknown_faces(
                     indices = I.flatten()
 
                     within_threshold = distances <= dist_threshold
+
+                    # Track FAISS assignments (noise faces assigned within threshold)
+                    assigned_noise_indices = noise_indices[within_threshold]
+                    for idx in assigned_noise_indices:
+                        cluster_methods[idx] = "faiss"
 
                     cluster_labels[noise_indices[within_threshold]] = valid_sampled_labels[
                         indices[within_threshold]
@@ -419,6 +438,10 @@ def cluster_unknown_faces(
                 valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
                 valid_sampled_labels = cluster_labels[valid_sampled_indices]
 
+                # Track HDBSCAN assignments (sampled faces with valid clusters)
+                for idx in valid_sampled_indices:
+                    cluster_methods[idx] = "hdbscan"
+
                 logger.info(
                     f"Assigning remaining {n_samples - len(valid_sampled_indices)} "
                     "faces to clusters using nearest neighbor..."
@@ -444,6 +467,11 @@ def cluster_unknown_faces(
                     indices = I.flatten()
 
                     within_threshold = distances <= dist_threshold
+
+                    # Track FAISS assignments (noise faces assigned within threshold)
+                    assigned_noise_indices = noise_indices[within_threshold]
+                    for idx in assigned_noise_indices:
+                        cluster_methods[idx] = "faiss"
 
                     cluster_labels[noise_indices[within_threshold]] = valid_sampled_labels[
                         indices[within_threshold]
@@ -480,7 +508,7 @@ def cluster_unknown_faces(
         cluster_similarities[label] = avg_similarity
 
     if not cluster_centers_dict:
-        return cluster_labels, np.array([]), {}, {}
+        return cluster_labels, np.array([]), {}, {}, cluster_methods
 
     max_label = max(cluster_centers_dict.keys())
     centers_arr = np.zeros((max_label + 1, face_embeddings.shape[1]), dtype=np.float32)
@@ -503,7 +531,7 @@ def cluster_unknown_faces(
             similarity = float(np.dot(face_embedding, centroid))
             centroid_similarities[idx] = similarity
 
-    return cluster_labels, centers_arr, cluster_similarities, centroid_similarities
+    return cluster_labels, centers_arr, cluster_similarities, centroid_similarities, cluster_methods
 
 
 async def sort(
@@ -632,6 +660,7 @@ async def sort(
             cluster_centers,
             cluster_similarities,
             centroid_similarities,
+            cluster_methods,
         ) = await asyncio.to_thread(
             cluster_unknown_faces,
             unsorted_embeddings,
@@ -690,6 +719,15 @@ async def sort(
                     await face_repo.update_face_similarities(
                         face_idx=real_idx, centroid_similarity=similarity
                     )
+
+                # Update cluster_method for faces in this cluster
+                for idx in indices:
+                    real_idx = unsorted_ids[idx]
+                    cluster_method = cluster_methods.get(idx)
+                    if cluster_method:
+                        await face_repo.update_cluster_method(
+                            face_idx=real_idx, cluster_method=cluster_method
+                        )
 
                 # Get data for this cluster
                 cluster_imgs = [imgname[idx] for idx in real_indices]
