@@ -8,7 +8,7 @@ import logging
 from typing import Any, Optional
 
 import numpy as np
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo import ASCENDING
 
 from face_sorter.config import get_settings
@@ -135,9 +135,7 @@ class FaceRepository:
             sort = [("idx", ASCENDING)]
 
         collection = await self._get_collection()
-        cursor = (
-            collection.find(query, projection=projection).sort(sort).skip(skip).limit(limit)
-        )
+        cursor = collection.find(query, projection=projection).sort(sort).skip(skip).limit(limit)
         return [doc async for doc in cursor]
 
     async def update_faces_cluster(self, indices: list[int], cluster_id: int) -> None:
@@ -149,18 +147,12 @@ class FaceRepository:
             cluster_id: Cluster ID to assign.
         """
         collection = await self._get_collection()
-        await collection.update_many(
-            {"idx": {"$in": indices}},
-            {"$set": {"cluster": cluster_id}}
-        )
+        await collection.update_many({"idx": {"$in": indices}}, {"$set": {"cluster": cluster_id}})
 
     async def clear_all_clusters(self) -> None:
         """Remove cluster labels from all faces."""
         collection = await self._get_collection()
-        await collection.update_many(
-            {"cluster": {"$exists": True}},
-            {"$unset": {"cluster": ""}}
-        )
+        await collection.update_many({"cluster": {"$exists": True}}, {"$unset": {"cluster": ""}})
 
     async def upsert_face_by_item(self, item: str, face_data: dict[str, Any]) -> None:
         """
@@ -171,11 +163,7 @@ class FaceRepository:
             face_data: Dictionary containing face information to update/insert.
         """
         collection = await self._get_collection()
-        await collection.update_one(
-            {"item": item},
-            {"$set": face_data},
-            upsert=True
-        )
+        await collection.update_one({"item": item}, {"$set": face_data}, upsert=True)
 
     async def exists_by_item(self, item: str) -> bool:
         """
@@ -209,8 +197,8 @@ class FaceRepository:
                 "stability_score": 1,
                 "classification_result": 1,
                 "content_probability": 1,
-                "_id": 0
-            }
+                "_id": 0,
+            },
         )
         return doc
 
@@ -459,6 +447,7 @@ async def fetch_data_optimized(
     list[list[int]],
     list[str],
     list[list[float]],
+    list[Optional[float]],
 ]:
     """
     Fetch optimized data from all collections for sorting.
@@ -477,6 +466,7 @@ async def fetch_data_optimized(
             - imgbbox: List of bounding boxes
             - imgcache: List of cache URLs
             - imgembeddings: List of image embeddings
+            - imgstabilityscores: List of stability scores
     """
     face_repo = FaceRepository(db)
     class_repo = ClassRepository(db)
@@ -497,24 +487,26 @@ async def fetch_data_optimized(
             "cache_url": 1,
             "bbox": 1,
             "embedding": 1,
+            "stability_score": 1,
             "_id": 0,
         },
         sort=[("idx", ASCENDING)],
     )
 
-    count = len(face_docs)
-    imgname = [None] * count
-    imgpath = [None] * count
-    imgcache = [None] * count
-    imgbbox = [None] * count
-    imgembeddings = [None] * count
+    imgname: list[str] = []
+    imgpath: list[str] = []
+    imgcache: list[str] = []
+    imgbbox: list[list[int]] = []
+    imgembeddings: list[list[float]] = []
+    imgstabilityscores: list[Optional[float]] = []
 
-    for i, doc in enumerate(face_docs):
-        imgname[i] = doc["item"]
-        imgpath[i] = doc["path"]
-        imgcache[i] = doc["cache_url"]
-        imgbbox[i] = doc["bbox"]
-        imgembeddings[i] = doc["embedding"]
+    for doc in face_docs:
+        imgname.append(doc["item"])
+        imgpath.append(doc["path"])
+        imgcache.append(doc["cache_url"])
+        imgbbox.append(doc["bbox"])
+        imgembeddings.append(doc["embedding"])
+        imgstabilityscores.append(doc.get("stability_score"))
 
     return (
         refname,
@@ -526,4 +518,5 @@ async def fetch_data_optimized(
         imgbbox,
         imgcache,
         imgembeddings,
+        imgstabilityscores,
     )

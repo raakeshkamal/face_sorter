@@ -9,11 +9,11 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Optional
 
 import faiss
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
 from sklearn.cluster import HDBSCAN
 
 from face_sorter.config import get_settings
@@ -23,7 +23,6 @@ from face_sorter.database.repositories import (
     FaceRepository,
     fetch_data_optimized,
 )
-from face_sorter.models.face import FaceClass
 from face_sorter.utils.file_async import async_makedirs
 
 logger = logging.getLogger(__name__)
@@ -74,9 +73,7 @@ async def get_all_class_names() -> list[str]:
     return class_names
 
 
-async def process_image(
-    img_url: str, expanded_path: str, bbox: np.ndarray
-) -> None:
+async def process_image(img_url: str, expanded_path: str, bbox: np.ndarray) -> None:
     """
     Process an image by drawing a bounding box and saving.
 
@@ -141,7 +138,7 @@ async def sort_faces_by_class(
         class_name = sorted_class_names[index]
         path = unique_class_paths[class_name]
         img_path = os.path.join(path, imgname[i])
-        
+
         # Use filename from imgcache[i] and join with provided cache_dir
         source_cache_path = os.path.join(cache_dir, os.path.basename(imgcache[i]))
         expanded_path = os.path.expanduser(source_cache_path)
@@ -228,19 +225,19 @@ def match_faces_to_classes(
 
     # Match faces to classes (best match)
     # Search each image against the class index
-    D, I = index.search(imgembeddings_arr, 1)
-    
+    D, I = index.search(imgembeddings_arr, 1)  # noqa: N806, E741
+
     sorted_ids = []
     sorted_class_names = []
     unsorted_ids = []
     unsorted_embeddings = []
-    
+
     threshold = get_settings().similarity_threshold
 
     for i in range(len(imgembeddings_arr)):
         similarity = D[i][0]
         class_idx = I[i][0]
-        
+
         if similarity >= threshold and class_idx != -1:
             sorted_ids.append(i)
             sorted_class_names.append(classname[class_idx])
@@ -258,14 +255,16 @@ def match_faces_to_classes(
 
 def cluster_unknown_faces(
     unsorted_embeddings: list[list[float]],
+    imgstabilityscores: list[Optional[float]],
     min_samples: Optional[int] = None,
     min_cluster_size: Optional[int] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Cluster unknown faces using HDBSCAN.
+    Cluster unknown faces using HDBSCAN with stability-based sampling.
 
     Args:
         unsorted_embeddings: List of unsorted face embeddings.
+        imgstabilityscores: List of stability scores for each face.
         min_samples: Minimum samples for HDBSCAN.
         min_cluster_size: Minimum cluster size for HDBSCAN.
 
@@ -280,86 +279,17 @@ def cluster_unknown_faces(
         min_samples = settings.cluster_min_samples
     if min_cluster_size is None:
         min_cluster_size = settings.cluster_min_size
-    
+
     cluster_selection_epsilon = settings.cluster_selection_epsilon
 
     face_embeddings = np.array(unsorted_embeddings, dtype=np.float32)
-    # Re-normalize just in case
     faiss.normalize_L2(face_embeddings)
 
     n_samples = face_embeddings.shape[0]
-    # Increased sample threshold for better distribution representation
     sample_threshold = 2000
 
-    if n_samples > sample_threshold:
-        logger.info(f"Dataset size {n_samples} is large. Using sampling (sample size: {sample_threshold})")
-        # Randomly sample indices
-        all_indices = np.arange(n_samples)
-        sampled_indices = np.random.choice(all_indices, min(n_samples, sample_threshold), replace=False)
-        unsampled_mask = np.ones(n_samples, dtype=bool)
-        unsampled_mask[sampled_indices] = False
-        unsampled_indices = all_indices[unsampled_mask]
-
-        sampled_embeddings = face_embeddings[sampled_indices]
-
-        # Fit HDBSCAN on the sampled faces
-        logger.info(f"Fitting HDBSCAN on {len(sampled_indices)} sampled faces...")
-        dbscan = HDBSCAN(
-            metric="euclidean",
-            min_samples=min_samples,
-            min_cluster_size=min_cluster_size,
-            cluster_selection_epsilon=cluster_selection_epsilon,
-            n_jobs=-1,
-        )
-        sampled_labels = dbscan.fit_predict(sampled_embeddings)
-
-        # Initialize labels for all faces
-        cluster_labels = np.full(n_samples, -1, dtype=np.int32)
-        cluster_labels[sampled_indices] = sampled_labels
-
-        # Identify valid clusters (label != -1)
-        valid_sampled_mask = (sampled_labels != -1)
-        if np.any(valid_sampled_mask):
-            valid_sampled_indices = sampled_indices[valid_sampled_mask]
-            valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
-            valid_sampled_labels = cluster_labels[valid_sampled_indices]
-
-            logger.info(f"Assigning remaining {n_samples - len(valid_sampled_indices)} faces to clusters using nearest neighbor...")
-            
-            # Use FAISS for efficient nearest neighbor search
-            # We index the sampled points that belong to a cluster
-            nn_index = faiss.IndexFlatL2(face_embeddings.shape[1])
-            nn_index.add(valid_sampled_embeddings)
-            
-            # Find nearest neighbor for all faces currently labeled as noise (-1)
-            # This includes unsampled faces AND sampled noise faces
-            noise_mask = (cluster_labels == -1)
-            noise_indices = all_indices[noise_mask]
-            noise_embeddings = face_embeddings[noise_mask]
-            
-            if len(noise_embeddings) > 0:
-                # Search for nearest neighbor
-                # D: L2 distances, I: indices in valid_sampled_embeddings
-                D, I = nn_index.search(noise_embeddings, 1)
-                
-                # Assign labels of the nearest neighbors ONLY if distance is within threshold
-                # For normalized vectors, L2 distance squared d^2 = 2(1 - cosine_similarity)
-                similarity_threshold = settings.similarity_threshold
-                dist_threshold = 2 * (1 - similarity_threshold)
-                
-                # Reshape D and I to 1D
-                distances = D.flatten()
-                indices = I.flatten()
-                
-                # Create mask for points within threshold
-                within_threshold = (distances <= dist_threshold)
-                
-                # Assign labels
-                cluster_labels[noise_indices[within_threshold]] = valid_sampled_labels[indices[within_threshold]]
-        else:
-            logger.warning("No clusters found in the sampled dataset.")
-    else:
-        # Run standard HDBSCAN on all faces
+    # Path C: Small dataset (<2000 total) - run HDBSCAN on all
+    if n_samples <= sample_threshold:
         logger.info(f"Running HDBSCAN on all {n_samples} faces...")
         dbscan = HDBSCAN(
             metric="euclidean",
@@ -369,31 +299,170 @@ def cluster_unknown_faces(
             n_jobs=-1,
         )
         cluster_labels = dbscan.fit_predict(face_embeddings)
+    else:
+        # Identify unstable faces (stability score > 0.5)
+        unstable_mask = np.array(
+            [(s is not None and s > 0.5) for s in imgstabilityscores], dtype=bool
+        )
+        unstable_indices = np.where(unstable_mask)[0]
 
-    
+        # Path A: Has unstable images - sample from unstable
+        if len(unstable_indices) > 0:
+            logger.info(
+                f"Found {len(unstable_indices)} unstable faces. "
+                f"Sampling up to {sample_threshold} for HDBSCAN..."
+            )
+
+            # Sample up to sample_threshold from unstable faces
+            num_samples = min(len(unstable_indices), sample_threshold)
+            sampled_indices = np.random.choice(unstable_indices, num_samples, replace=False)
+
+            # Identify unsampled faces (all faces except sampled)
+            all_indices = np.arange(n_samples)
+            unsampled_mask = np.ones(n_samples, dtype=bool)
+            unsampled_mask[sampled_indices] = False
+
+            sampled_embeddings = face_embeddings[sampled_indices]
+
+            # Fit HDBSCAN on sampled unstable faces
+            logger.info(f"Fitting HDBSCAN on {len(sampled_indices)} sampled unstable faces...")
+            dbscan = HDBSCAN(
+                metric="euclidean",
+                min_samples=min_samples,
+                min_cluster_size=min_cluster_size,
+                cluster_selection_epsilon=cluster_selection_epsilon,
+                n_jobs=-1,
+            )
+            sampled_labels = dbscan.fit_predict(sampled_embeddings)
+
+            # Initialize labels for all faces
+            cluster_labels = np.full(n_samples, -1, dtype=np.int32)
+            cluster_labels[sampled_indices] = sampled_labels
+
+            # Identify valid clusters (label != -1)
+            valid_sampled_mask = sampled_labels != -1
+            if np.any(valid_sampled_mask):
+                valid_sampled_indices = sampled_indices[valid_sampled_mask]
+                valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
+                valid_sampled_labels = cluster_labels[valid_sampled_indices]
+
+                logger.info(
+                    f"Assigning remaining {n_samples - len(valid_sampled_indices)} "
+                    "faces to clusters using nearest neighbor..."
+                )
+
+                # Use FAISS for efficient nearest neighbor search
+                nn_index = faiss.IndexFlatL2(face_embeddings.shape[1])
+                nn_index.add(valid_sampled_embeddings)
+
+                # Find nearest neighbor for all faces currently labeled as noise (-1)
+                noise_mask = cluster_labels == -1
+                noise_indices = all_indices[noise_mask]
+                noise_embeddings = face_embeddings[noise_mask]
+
+                if len(noise_embeddings) > 0:
+                    D, I = nn_index.search(noise_embeddings, 1)  # noqa: N806, E741
+
+                    # Assign labels of the nearest neighbors ONLY if distance is within threshold
+                    similarity_threshold = settings.similarity_threshold
+                    dist_threshold = 2 * (1 - similarity_threshold)
+
+                    distances = D.flatten()
+                    indices = I.flatten()
+
+                    within_threshold = distances <= dist_threshold
+
+                    cluster_labels[noise_indices[within_threshold]] = valid_sampled_labels[
+                        indices[within_threshold]
+                    ]
+            else:
+                logger.warning("No clusters found in the sampled unstable dataset.")
+        else:
+            # Path B: No unstable images - use current approach (2000 random samples from all)
+            logger.info(
+                f"No unstable faces found. Using random sampling (sample size: {sample_threshold})"
+            )
+            all_indices = np.arange(n_samples)
+            sampled_indices = np.random.choice(
+                all_indices, min(n_samples, sample_threshold), replace=False
+            )
+
+            sampled_embeddings = face_embeddings[sampled_indices]
+
+            # Fit HDBSCAN on the sampled faces
+            logger.info(f"Fitting HDBSCAN on {len(sampled_indices)} sampled faces...")
+            dbscan = HDBSCAN(
+                metric="euclidean",
+                min_samples=min_samples,
+                min_cluster_size=min_cluster_size,
+                cluster_selection_epsilon=cluster_selection_epsilon,
+                n_jobs=-1,
+            )
+            sampled_labels = dbscan.fit_predict(sampled_embeddings)
+
+            # Initialize labels for all faces
+            cluster_labels = np.full(n_samples, -1, dtype=np.int32)
+            cluster_labels[sampled_indices] = sampled_labels
+
+            # Identify valid clusters (label != -1)
+            valid_sampled_mask = sampled_labels != -1
+            if np.any(valid_sampled_mask):
+                valid_sampled_indices = sampled_indices[valid_sampled_mask]
+                valid_sampled_embeddings = face_embeddings[valid_sampled_indices]
+                valid_sampled_labels = cluster_labels[valid_sampled_indices]
+
+                logger.info(
+                    f"Assigning remaining {n_samples - len(valid_sampled_indices)} "
+                    "faces to clusters using nearest neighbor..."
+                )
+
+                # Use FAISS for efficient nearest neighbor search
+                nn_index = faiss.IndexFlatL2(face_embeddings.shape[1])
+                nn_index.add(valid_sampled_embeddings)
+
+                # Find nearest neighbor for all faces currently labeled as noise (-1)
+                noise_mask = cluster_labels == -1
+                noise_indices = all_indices[noise_mask]
+                noise_embeddings = face_embeddings[noise_mask]
+
+                if len(noise_embeddings) > 0:
+                    D, I = nn_index.search(noise_embeddings, 1)  # noqa: N806, E741
+
+                    # Assign labels of the nearest neighbors ONLY if distance is within threshold
+                    similarity_threshold = settings.similarity_threshold
+                    dist_threshold = 2 * (1 - similarity_threshold)
+
+                    distances = D.flatten()
+                    indices = I.flatten()
+
+                    within_threshold = distances <= dist_threshold
+
+                    cluster_labels[noise_indices[within_threshold]] = valid_sampled_labels[
+                        indices[within_threshold]
+                    ]
+            else:
+                logger.warning("No clusters found in the sampled dataset.")
+
     # Calculate centroids in ORIGINAL space using ALL assigned points
-    # This includes both originally sampled points and those added by nearest neighbor
     unique_labels = np.unique(cluster_labels)
     cluster_centers_dict = {}
-    
+
     for label in unique_labels:
         if label == -1:
             continue
-        mask = (cluster_labels == label)
+        mask = cluster_labels == label
         centroid = face_embeddings[mask].mean(axis=0)
-        # Re-normalize centroid
         centroid = centroid / (np.linalg.norm(centroid) + 1e-9)
         cluster_centers_dict[label] = centroid
 
-    # Convert to expected array format (indices matching label values)
     if not cluster_centers_dict:
         return cluster_labels, np.array([])
-        
+
     max_label = max(cluster_centers_dict.keys())
     centers_arr = np.zeros((max_label + 1, face_embeddings.shape[1]), dtype=np.float32)
     for label, center in cluster_centers_dict.items():
         centers_arr[label] = center
-        
+
     return cluster_labels, centers_arr
 
 
@@ -403,7 +472,9 @@ async def sort(
     max_results: int = 10,
     min_samples: Optional[int] = None,
     min_cluster_size: Optional[int] = None,
-    progress_callback: Optional[Callable[[int, int, str, str, Optional[dict[str, Any]]], None]] = None,
+    progress_callback: Optional[
+        Callable[[int, int, str, str, Optional[dict[str, Any]]], None]
+    ] = None,
     cancellation_event: Optional[asyncio.Event] = None,
 ) -> None:
     """
@@ -450,6 +521,7 @@ async def sort(
         imgbbox,
         imgcache,
         imgembeddings,
+        imgstabilityscores,
     ) = await fetch_data_optimized()
 
     total_imgs = len(imgembeddings)
@@ -480,7 +552,9 @@ async def sort(
     # Sort faces by class
     if sorted_ids:
         if progress_callback:
-            progress_callback(30, 100, "Sorting", f"Sorting {len(sorted_ids)} faces into class directories...")
+            progress_callback(
+                30, 100, "Sorting", f"Sorting {len(sorted_ids)} faces into class directories..."
+            )
         await sort_faces_by_class(
             cache_dir, imgname, imgcache, imgbbox, sorted_class_names, sorted_ids
         )
@@ -492,21 +566,26 @@ async def sort(
     if unsorted_embeddings:
         if progress_callback:
             progress_callback(50, 100, "Clustering", "Clustering unknown faces...", None)
-        
+
         # Yield to event loop to ensure progress message is sent
         await asyncio.sleep(0.01)
 
         import time
+
         start_time = time.time()
         logger.info(f"Starting HDBSCAN clustering for {len(unsorted_embeddings)} faces...")
-        
+
+        # Filter stability scores for unsorted faces
+        unsorted_stability_scores = [imgstabilityscores[idx] for idx in unsorted_ids]
+
         cluster_labels, cluster_centers = await asyncio.to_thread(
-            cluster_unknown_faces, 
+            cluster_unknown_faces,
             unsorted_embeddings,
+            unsorted_stability_scores,
             min_samples=min_samples,
-            min_cluster_size=min_cluster_size
+            min_cluster_size=min_cluster_size,
         )
-        
+
         end_time = time.time()
         logger.info(f"HDBSCAN clustering completed in {end_time - start_time:.2f} seconds")
 
@@ -524,14 +603,14 @@ async def sort(
         await face_repo.clear_all_clusters()
 
         results = 0
-        
+
         for i, label in enumerate(sorted_unique_labels):
             if label != -1 and results < max_results:  # Skip noise points
                 if cancellation_event and cancellation_event.is_set():
                     return
 
                 logger.info(f"Processing cluster {results}")
-                
+
                 # indices are relative to unsorted_embeddings
                 indices = np.where(cluster_labels == label)[0]
                 centroid = cluster_centers[label].tolist()
@@ -556,21 +635,25 @@ async def sort(
 
                 if progress_callback:
                     progress_callback(
-                        50 + int((results / max_results) * 40), 
-                        100, 
-                        "Saving Clusters", 
-                        f"Saving cluster {results} ({len(indices)} faces)..."
+                        50 + int((results / max_results) * 40),
+                        100,
+                        "Saving Clusters",
+                        f"Saving cluster {results} ({len(indices)} faces)...",
                     )
 
-                await show_results(
-                    cache_dir, cluster_imgs, cluster_cache, cluster_bbox, results
-                )
+                await show_results(cache_dir, cluster_imgs, cluster_cache, cluster_bbox, results)
                 results += 1
 
         logger.info(f"Saved {results} clusters")
 
     if progress_callback:
-        progress_callback(100, 100, "Complete", f"Successfully sorted faces and found {results if unsorted_embeddings else 0} clusters.")
+        cluster_count = results if unsorted_embeddings else 0
+        progress_callback(
+            100,
+            100,
+            "Complete",
+            f"Successfully sorted faces and found {cluster_count} clusters.",
+        )
 
 
 # Synchronous wrappers for backward compatibility
@@ -613,4 +696,4 @@ def sort_sync(cache_dir: Optional[str] = None, max_results: int = 10) -> None:
         cache_dir: Cache directory.
         max_results: Maximum number of clusters to show.
     """
-    return asyncio.run(sort(cache_dir, max_results))
+    return asyncio.run(sort(cache_dir=cache_dir, max_results=max_results))
