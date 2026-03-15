@@ -19,14 +19,9 @@ from face_sorter.services.sorting import (
     remove_class_sync,
     sort_sync,
 )
-from face_sorter.services.training import (
-    train_face_detections_sync,
-    train_stability_scores_sync,
-    train_sync,
-)
+from face_sorter.services.training import train_sync
 from face_sorter.utils.logging import setup_logging
 
-# Set up logging
 settings = get_settings()
 setup_logging(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -40,17 +35,22 @@ def cli():
 
 
 @cli.command()
-@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
+@click.option(
+    "--source-dir", type=click.Path(exists=True), help="Source directory containing images"
+)
 @click.option("--noface-dir", type=click.Path(), help="Directory for images without faces")
 @click.option("--broken-dir", type=click.Path(), help="Directory for broken images")
 @click.option("--cache-dir", type=click.Path(), help="Cache directory")
-@click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)")
+@click.option(
+    "--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)"
+)
 def train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir):
     """
     Train the model by detecting faces and generating embeddings.
 
     This processes all images in the source directory, detects faces using InsightFace,
-    and generates embeddings that are stored in MongoDB.
+    calculates stability scores, and generates embeddings that are stored in MongoDB.
+    Images without faces are moved to the noface directory.
     """
     logger.info("Starting training...")
     progress = train_sync(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir)
@@ -59,43 +59,10 @@ def train(source_dir, noface_dir, broken_dir, cache_dir, duplicates_dir):
     logger.info(f"  Without faces: {progress.without_faces}")
 
 
-@cli.command("train-stability")
-@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
-@click.option("--cache-dir", type=click.Path(), help="Cache directory")
-@click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)")
-def train_stability_cli(source_dir, cache_dir, duplicates_dir):
-    """
-    Train stability scores only.
-
-    This processes all images in the source directory, calculates stability scores,
-    and saves partial documents to MongoDB. Does not perform face detection.
-    """
-    logger.info("Starting stability score training...")
-    progress = train_stability_scores_sync(source_dir, cache_dir, duplicates_dir)
-    logger.info(f"Stability score training complete. Processed {progress.processed} images")
-
-
-@cli.command("train-faces")
-@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
-@click.option("--noface-dir", type=click.Path(), help="Directory for images without faces")
-@click.option("--cache-dir", type=click.Path(), help="Cache directory")
-@click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images (will be skipped)")
-def train_faces_cli(source_dir, noface_dir, cache_dir, duplicates_dir):
-    """
-    Train face detection only. Merges with existing stability scores if present.
-
-    This processes all images in the source directory, detects faces using InsightFace,
-    and merges with existing stability scores. Moves images without faces to noface directory.
-    """
-    logger.info("Starting face detection training...")
-    progress = train_face_detections_sync(source_dir, noface_dir, cache_dir, duplicates_dir)
-    logger.info(f"Face detection training complete. Processed {progress.processed} images")
-    logger.info(f"  With faces: {progress.with_faces}")
-    logger.info(f"  Without faces: {progress.without_faces}")
-
-
 @cli.command()
-@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
+@click.option(
+    "--source-dir", type=click.Path(exists=True), help="Source directory containing images"
+)
 @click.option("--output-dir", type=click.Path(), help="Output directory for cleaned images")
 @click.option("--broken-dir", type=click.Path(), help="Directory for broken/invalid images")
 @click.option("--batch-size", type=int, help="Batch size for processing")
@@ -103,7 +70,9 @@ def train_faces_cli(source_dir, noface_dir, cache_dir, duplicates_dir):
 @click.option("--quality", type=int, help="JPEG quality (1-100)")
 @click.option("--recursive/--no-recursive", default=None, help="Scan recursively")
 @click.option("--start-index", type=int, help="Starting index for sequential naming")
-def clean(source_dir, output_dir, broken_dir, batch_size, img_prefix, quality, recursive, start_index):
+def clean(
+    source_dir, output_dir, broken_dir, batch_size, img_prefix, quality, recursive, start_index
+):
     """
     Clean and standardize an image dataset.
 
@@ -153,12 +122,16 @@ def build_cache(cache_dir, quality):
 
 
 @cli.command()
-@click.option("--source-dir", type=click.Path(exists=True), help="Source directory containing images")
+@click.option(
+    "--source-dir", type=click.Path(exists=True), help="Source directory containing images"
+)
 @click.option("--duplicates-dir", type=click.Path(), help="Directory for duplicate images")
 @click.option("--threshold", type=float, help="Similarity threshold (0-1)")
 @click.option("--model-name", type=str, help="CLIP model name")
 @click.option("--batch-size", type=int, help="Batch size for processing")
-@click.option("--force-recompute", is_flag=True, help="Force recompute embeddings even if cache exists")
+@click.option(
+    "--force-recompute", is_flag=True, help="Force recompute embeddings even if cache exists"
+)
 def dedup(source_dir, duplicates_dir, threshold, model_name, batch_size, force_recompute):
     """
     Find and move duplicate images.
@@ -240,7 +213,6 @@ def list_classes():
         click.echo("No classes found")
 
 
-# Add aliases for backward compatibility
 cli.add_command(add_class, name="add-class")
 cli.add_command(remove, name="remove-class")
 cli.add_command(sort_faces, name="sort")

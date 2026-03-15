@@ -148,15 +148,3 @@ class DeduplicationCancelledError(Exception):
     """Exception raised when deduplication operation is cancelled."""
 
     pass
-
-
-class StabilityScoreTrainingCancelledError(Exception):
-    """Exception raised when stability score training is cancelled."""
-
-    pass
-
-
-class FaceDetectionTrainingCancelledError(Exception):
-    """Exception raised when face detection training is cancelled."""
-
-    pass

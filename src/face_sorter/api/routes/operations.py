@@ -19,19 +19,15 @@ from face_sorter.database import SessionRepository
 from face_sorter.models.session import (
     CleaningCancelledError,
     DeduplicationCancelledError,
-    FaceDetectionTrainingCancelledError,
     SessionProgress,
     SessionStatus,
-    StabilityScoreTrainingCancelledError,
+    TrainingCancelledError,
     TrainingSession,
 )
 from face_sorter.services.clean import clean_dataset
 from face_sorter.services.deduplication import build_dedup_cache
 from face_sorter.services.task_tracker import task_tracker
-from face_sorter.services.training import (
-    train_face_detections,
-    train_stability_scores,
-)
+from face_sorter.services.training import train
 from face_sorter.services.sorting import sort
 
 logger = logging.getLogger(__name__)
@@ -91,13 +87,13 @@ class OperationResponse(BaseModel):
     status: str
 
 
-@router.post("/train-stability", response_model=OperationResponse)
-async def start_train_stability(request: TrainRequest) -> OperationResponse:
+@router.post("/train", response_model=OperationResponse)
+async def start_train(request: TrainRequest) -> OperationResponse:
     """
-    Start stability score training operation in background.
+    Start training operation in background.
 
-    This processes images and calculates stability scores only, without face detection.
-    Saves partial documents to MongoDB.
+    This processes images: detects faces using InsightFace and calculates
+    stability scores. Images without faces are moved to noface directory.
 
     Args:
         request: Training request with directories and options.
@@ -108,11 +104,10 @@ async def start_train_stability(request: TrainRequest) -> OperationResponse:
     task_id = str(uuid.uuid4())
     source_dir = request.source_dir or ""
 
-    # Create session in database
     session_repo = SessionRepository()
     session = TrainingSession(
         task_id=task_id,
-        operation_type="training_stability",
+        operation_type="training",
         status=SessionStatus.PENDING,
         source_dir=source_dir,
         config=request.model_dump(),
@@ -121,179 +116,67 @@ async def start_train_stability(request: TrainRequest) -> OperationResponse:
     )
     await session_repo.create_session(session)
 
-    # Create cancellation event
     cancellation_event = asyncio.Event()
 
-    async def run_stability_training_with_session():
-        """Run stability training with session tracking."""
+    async def run_training_with_session():
+        """Run training with session tracking."""
         session_repo = SessionRepository()
         try:
-            # Update session to RUNNING
             await session_repo.update_session(
                 task_id,
                 {"status": SessionStatus.RUNNING.value},
             )
 
-            def progress_handler(current: int, total: int, status_text: str, current_item: str, image_data: dict | None = None) -> None:
-                """Handle progress updates during stability training."""
+            def progress_handler(
+                current: int,
+                total: int,
+                status_text: str,
+                current_item: str,
+                image_data: dict | None = None,
+            ) -> None:
+                """Handle progress updates during training."""
                 asyncio.create_task(
-                    connection_manager.send_progress("training_stability", task_id, current, total, status_text, current_item, image_data)
+                    connection_manager.send_progress(
+                        "training", task_id, current, total, status_text, current_item, image_data
+                    )
                 )
-                # Also update session progress
                 asyncio.create_task(
                     session_repo.update_session(
                         task_id,
                         {
-                            "progress": SessionProgress(current, total, status_text, current_item).to_dict(),
+                            "progress": SessionProgress(
+                                current, total, status_text, current_item
+                            ).to_dict(),
                         },
                     )
                 )
 
-            # Run stability training
-            result = await train_stability_scores(
-                source_dir=request.source_dir,
-                cache_dir=request.cache_dir,
-                duplicates_dir=request.duplicates_dir,
-                progress_callback=progress_handler,
-                cancellation_event=cancellation_event,
-            )
-
-            # Update session to COMPLETED
-            await session_repo.update_session(
-                task_id,
-                {
-                    "status": SessionStatus.COMPLETED.value,
-                    "completed_at": datetime.now(timezone.utc),
-                    "progress": SessionProgress(result.processed, result.total, "Complete", "").to_dict(),
-                },
-            )
-
-            # Send completion message via WebSocket
-            await connection_manager.send_progress("training_stability", task_id, result.processed, result.total, "Complete", "")
-
-        except StabilityScoreTrainingCancelledError:
-            # Update session to CANCELLED
-            await session_repo.update_session(
-                task_id,
-                {
-                    "status": SessionStatus.CANCELLED.value,
-                    "completed_at": datetime.now(timezone.utc),
-                },
-            )
-            logger.info(f"Stability score training session {task_id} was cancelled")
-            await connection_manager.send_progress("training_stability", task_id, 0, 0, "Cancelled", "")
-
-        except Exception as e:
-            # Update session to FAILED
-            await session_repo.update_session(
-                task_id,
-                {
-                    "status": SessionStatus.FAILED.value,
-                    "completed_at": datetime.now(timezone.utc),
-                    "error": str(e),
-                },
-            )
-            logger.error(f"Stability score training session {task_id} failed: {e}")
-            await connection_manager.send_progress("training_stability", task_id, 0, 0, "Failed", str(e))
-
-        finally:
-            # Unregister task
-            task_tracker.unregister_task(task_id)
-
-    # Create and register the task
-    task = asyncio.create_task(run_stability_training_with_session())
-    task_tracker.register_task(task_id, task)
-
-    return OperationResponse(
-        task_id=task_id,
-        operation="training_stability",
-        status="started",
-    )
-
-
-@router.post("/train-faces", response_model=OperationResponse)
-async def start_train_faces(request: TrainRequest) -> OperationResponse:
-    """
-    Start face detection training operation in background.
-
-    This processes images and detects faces, merging with existing stability scores.
-    Moves images without faces to noface directory.
-
-    Args:
-        request: Training request with directories and options.
-
-    Returns:
-        Operation response with task_id for progress tracking.
-    """
-    task_id = str(uuid.uuid4())
-    source_dir = request.source_dir or ""
-
-    # Create session in database
-    session_repo = SessionRepository()
-    session = TrainingSession(
-        task_id=task_id,
-        operation_type="training_faces",
-        status=SessionStatus.PENDING,
-        source_dir=source_dir,
-        config=request.model_dump(),
-        progress=SessionProgress(0, 0, "Initializing", "").to_dict(),
-        started_at=datetime.now(timezone.utc),
-    )
-    await session_repo.create_session(session)
-
-    # Create cancellation event
-    cancellation_event = asyncio.Event()
-
-    async def run_face_detection_with_session():
-        """Run face detection training with session tracking."""
-        session_repo = SessionRepository()
-        try:
-            # Update session to RUNNING
-            await session_repo.update_session(
-                task_id,
-                {"status": SessionStatus.RUNNING.value},
-            )
-
-            def progress_handler(current: int, total: int, status_text: str, current_item: str, image_data: dict | None = None) -> None:
-                """Handle progress updates during face detection training."""
-                asyncio.create_task(
-                    connection_manager.send_progress("training_faces", task_id, current, total, status_text, current_item, image_data)
-                )
-                # Also update session progress
-                asyncio.create_task(
-                    session_repo.update_session(
-                        task_id,
-                        {
-                            "progress": SessionProgress(current, total, status_text, current_item).to_dict(),
-                        },
-                    )
-                )
-
-            # Run face detection training
-            result = await train_face_detections(
+            result = await train(
                 source_dir=request.source_dir,
                 noface_dir=request.noface_dir,
+                broken_dir=request.broken_dir,
                 cache_dir=request.cache_dir,
                 duplicates_dir=request.duplicates_dir,
                 progress_callback=progress_handler,
                 cancellation_event=cancellation_event,
             )
 
-            # Update session to COMPLETED
             await session_repo.update_session(
                 task_id,
                 {
                     "status": SessionStatus.COMPLETED.value,
                     "completed_at": datetime.now(timezone.utc),
-                    "progress": SessionProgress(result.processed, result.total, "Complete", "").to_dict(),
+                    "progress": SessionProgress(
+                        result.processed, result.total, "Complete", ""
+                    ).to_dict(),
                 },
             )
 
-            # Send completion message via WebSocket
-            await connection_manager.send_progress("training_faces", task_id, result.processed, result.total, "Complete", "")
+            await connection_manager.send_progress(
+                "training", task_id, result.processed, result.total, "Complete", ""
+            )
 
-        except FaceDetectionTrainingCancelledError:
-            # Update session to CANCELLED
+        except TrainingCancelledError:
             await session_repo.update_session(
                 task_id,
                 {
@@ -301,11 +184,10 @@ async def start_train_faces(request: TrainRequest) -> OperationResponse:
                     "completed_at": datetime.now(timezone.utc),
                 },
             )
-            logger.info(f"Face detection training session {task_id} was cancelled")
-            await connection_manager.send_progress("training_faces", task_id, 0, 0, "Cancelled", "")
+            logger.info(f"Training session {task_id} was cancelled")
+            await connection_manager.send_progress("training", task_id, 0, 0, "Cancelled", "")
 
         except Exception as e:
-            # Update session to FAILED
             await session_repo.update_session(
                 task_id,
                 {
@@ -314,20 +196,18 @@ async def start_train_faces(request: TrainRequest) -> OperationResponse:
                     "error": str(e),
                 },
             )
-            logger.error(f"Face detection training session {task_id} failed: {e}")
-            await connection_manager.send_progress("training_faces", task_id, 0, 0, "Failed", str(e))
+            logger.error(f"Training session {task_id} failed: {e}")
+            await connection_manager.send_progress("training", task_id, 0, 0, "Failed", str(e))
 
         finally:
-            # Unregister task
             task_tracker.unregister_task(task_id)
 
-    # Create and register the task
-    task = asyncio.create_task(run_face_detection_with_session())
+    task = asyncio.create_task(run_training_with_session())
     task_tracker.register_task(task_id, task)
 
     return OperationResponse(
         task_id=task_id,
-        operation="training_faces",
+        operation="training",
         status="started",
     )
 
@@ -346,7 +226,6 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
     task_id = str(uuid.uuid4())
     source_dir = request.source_dir or ""
 
-    # Create session in database
     session_repo = SessionRepository()
     session = TrainingSession(
         task_id=task_id,
@@ -359,7 +238,6 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
     )
     await session_repo.create_session(session)
 
-    # Create cancellation event
     cancellation_event = asyncio.Event()
 
     async def run_cleaning_with_session():
@@ -372,7 +250,11 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
             )
 
             def progress_handler(
-                current: int, total: int, status: str, current_item: str, current_data: Optional[dict] = None
+                current: int,
+                total: int,
+                status: str,
+                current_item: str,
+                current_data: Optional[dict] = None,
             ) -> None:
                 """Handle progress updates during cleaning."""
                 asyncio.create_task(
@@ -380,12 +262,13 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
                         "cleaning", task_id, current, total, status, current_item, current_data
                     )
                 )
-                # Also update session progress
                 asyncio.create_task(
                     session_repo.update_session(
                         task_id,
                         {
-                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                            "progress": SessionProgress(
+                                current, total, status, current_item
+                            ).to_dict(),
                         },
                     )
                 )
@@ -408,11 +291,15 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
                 {
                     "status": SessionStatus.COMPLETED.value,
                     "completed_at": datetime.now(timezone.utc),
-                    "progress": SessionProgress(result.processed, result.processed, "Complete", "").to_dict(),
+                    "progress": SessionProgress(
+                        result.processed, result.processed, "Complete", ""
+                    ).to_dict(),
                 },
             )
 
-            await connection_manager.send_progress("cleaning", task_id, result.processed, result.processed, "Complete", "")
+            await connection_manager.send_progress(
+                "cleaning", task_id, result.processed, result.processed, "Complete", ""
+            )
 
         except CleaningCancelledError:
             await session_repo.update_session(
@@ -440,7 +327,6 @@ async def start_clean(request: CleanRequest) -> OperationResponse:
         finally:
             task_tracker.unregister_task(task_id)
 
-    # Create and register the task
     task = asyncio.create_task(run_cleaning_with_session())
     task_tracker.register_task(task_id, task)
 
@@ -465,7 +351,6 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
     task_id = str(uuid.uuid4())
     source_dir = request.source_dir or ""
 
-    # Create session in database
     session_repo = SessionRepository()
     session = TrainingSession(
         task_id=task_id,
@@ -478,7 +363,6 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
     )
     await session_repo.create_session(session)
 
-    # Create cancellation event
     cancellation_event = asyncio.Event()
 
     async def run_dedup_with_session():
@@ -490,7 +374,9 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
                 {"status": SessionStatus.RUNNING.value},
             )
 
-            def dedup_progress_handler(current: int, total: int, status: str, current_item: str) -> None:
+            def dedup_progress_handler(
+                current: int, total: int, status: str, current_item: str
+            ) -> None:
                 """Handle progress updates during deduplication."""
                 asyncio.create_task(
                     connection_manager.send_progress(
@@ -501,13 +387,16 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
                     session_repo.update_session(
                         task_id,
                         {
-                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                            "progress": SessionProgress(
+                                current, total, status, current_item
+                            ).to_dict(),
                         },
                     )
                 )
 
             from face_sorter.config import get_settings
             from pathlib import Path
+
             settings = get_settings()
 
             source_dir = request.source_dir or settings.source_dir
@@ -517,26 +406,41 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
                 source_dir=source_dir,
                 duplicates_dir=derived_duplicates_dir,
                 model_name=request.dedup_model_name or settings.dedup_model_name,
-                threshold=request.dedup_threshold if request.dedup_threshold is not None else settings.dedup_threshold,
-                batch_size=request.dedup_batch_size if request.dedup_batch_size is not None else settings.dedup_batch_size,
+                threshold=request.dedup_threshold
+                if request.dedup_threshold is not None
+                else settings.dedup_threshold,
+                batch_size=request.dedup_batch_size
+                if request.dedup_batch_size is not None
+                else settings.dedup_batch_size,
                 cache_file=request.dedup_cache_file or settings.dedup_cache_file,
                 force_recompute=request.dedup_force_recompute,
                 progress_callback=dedup_progress_handler,
                 cancellation_event=cancellation_event,
             )
 
-            logger.info(f"Deduplication complete: {dedup_result.duplicate_groups} groups, {dedup_result.total_duplicates} duplicates")
+            logger.info(
+                f"Deduplication complete: {dedup_result.duplicate_groups} groups, {dedup_result.total_duplicates} duplicates"
+            )
 
             await session_repo.update_session(
                 task_id,
                 {
                     "status": SessionStatus.COMPLETED.value,
                     "completed_at": datetime.now(timezone.utc),
-                    "progress": SessionProgress(dedup_result.total_images, dedup_result.total_images, "Complete", "").to_dict(),
+                    "progress": SessionProgress(
+                        dedup_result.total_images, dedup_result.total_images, "Complete", ""
+                    ).to_dict(),
                 },
             )
 
-            await connection_manager.send_progress("deduplicating", task_id, dedup_result.total_images, dedup_result.total_images, "Complete", "")
+            await connection_manager.send_progress(
+                "deduplicating",
+                task_id,
+                dedup_result.total_images,
+                dedup_result.total_images,
+                "Complete",
+                "",
+            )
 
         except DeduplicationCancelledError:
             await session_repo.update_session(
@@ -564,7 +468,6 @@ async def start_deduplicate(request: DedupRequest) -> OperationResponse:
         finally:
             task_tracker.unregister_task(task_id)
 
-    # Create and register the task
     task = asyncio.create_task(run_dedup_with_session())
     task_tracker.register_task(task_id, task)
 
@@ -589,7 +492,6 @@ async def start_sort(request: SortRequest) -> OperationResponse:
     task_id = str(uuid.uuid4())
     source_dir = request.source_dir or ""
 
-    # Create session in database
     session_repo = SessionRepository()
     session = TrainingSession(
         task_id=task_id,
@@ -602,7 +504,6 @@ async def start_sort(request: SortRequest) -> OperationResponse:
     )
     await session_repo.create_session(session)
 
-    # Create cancellation event
     cancellation_event = asyncio.Event()
 
     async def run_sorting_with_session():
@@ -615,7 +516,11 @@ async def start_sort(request: SortRequest) -> OperationResponse:
             )
 
             def progress_handler(
-                current: int, total: int, status: str, current_item: str, current_data: Optional[dict] = None
+                current: int,
+                total: int,
+                status: str,
+                current_item: str,
+                current_data: Optional[dict] = None,
             ) -> None:
                 """Handle progress updates during sorting."""
                 asyncio.create_task(
@@ -627,7 +532,9 @@ async def start_sort(request: SortRequest) -> OperationResponse:
                     session_repo.update_session(
                         task_id,
                         {
-                            "progress": SessionProgress(current, total, status, current_item).to_dict(),
+                            "progress": SessionProgress(
+                                current, total, status, current_item
+                            ).to_dict(),
                         },
                     )
                 )
@@ -682,7 +589,6 @@ async def start_sort(request: SortRequest) -> OperationResponse:
         finally:
             task_tracker.unregister_task(task_id)
 
-    # Create and register the task
     task = asyncio.create_task(run_sorting_with_session())
     task_tracker.register_task(task_id, task)
 
@@ -703,7 +609,6 @@ async def websocket_endpoint(websocket: WebSocket, operation_type: str, task_id:
         operation_type: Type of operation (training, cleaning, deduping, sorting).
         task_id: Unique task identifier.
     """
-    # Validate that the session exists and is RUNNING before accepting connection
     session_repo = SessionRepository()
     session = await session_repo.get_session(task_id)
 
@@ -713,17 +618,20 @@ async def websocket_endpoint(websocket: WebSocket, operation_type: str, task_id:
         return
 
     if session.status != SessionStatus.RUNNING:
-        logger.warning(f"WebSocket connection rejected: Session {task_id} is not running (status: {session.status})")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=f"Session is not running (status: {session.status})")
+        logger.warning(
+            f"WebSocket connection rejected: Session {task_id} is not running (status: {session.status})"
+        )
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason=f"Session is not running (status: {session.status})",
+        )
         return
 
     await connection_manager.connect(websocket, operation_type, task_id)
 
     try:
-        # Keep connection alive and receive any messages
         while True:
             await websocket.receive_text()
-            # Could handle client messages here if needed
     except WebSocketDisconnect:
         connection_manager.disconnect(websocket, operation_type, task_id)
     except Exception as e:
@@ -761,7 +669,9 @@ async def get_session(task_id: str) -> dict:
     session_repo = SessionRepository()
     session = await session_repo.get_session(task_id)
     if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found"
+        )
     return session.to_dict()
 
 
@@ -784,7 +694,9 @@ async def cancel_session(task_id: str) -> OperationResponse:
 
     if session is None:
         logger.warning(f"Cancel requested for non-existent session {task_id}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {task_id} not found"
+        )
 
     logger.info(f"Cancel requested for session {task_id} with status: {session.status}")
 
@@ -795,27 +707,24 @@ async def cancel_session(task_id: str) -> OperationResponse:
             detail=f"Session {task_id} is not running (status: {session.status})",
         )
 
-    # Close all WebSocket connections for this task BEFORE cancelling
     await connection_manager.disconnect_all_for_task(session.operation_type, task_id)
     logger.info(f"Closed WebSocket connections for session {task_id}")
 
-    # Cancel the task
     cancelled = await task_tracker.cancel_task(task_id)
 
     if cancelled:
         logger.info(f"Successfully cancelled task {task_id} in task tracker")
     else:
-        # Task was not found in memory (e.g., server restart)
-        logger.warning(f"Task {task_id} not found in memory but marked as RUNNING in DB. Force cancelling in DB.")
+        logger.warning(
+            f"Task {task_id} not found in memory but marked as RUNNING in DB. Force cancelling in DB."
+        )
 
-    # Delete the session from database immediately (instead of just marking as cancelled)
     deleted = await session_repo.delete_session(task_id)
     if deleted:
         logger.info(f"Deleted session {task_id} from database")
     else:
         logger.warning(f"Failed to delete session {task_id} from database")
 
-    # Unregister task from tracker
     task_tracker.unregister_task(task_id)
 
     return OperationResponse(
