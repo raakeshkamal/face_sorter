@@ -257,7 +257,7 @@ function Cleaning() {
           <div className="cleaning-form card">
             <h2 className="form-title">Cleaning</h2>
             <p className="form-help" style={{ marginBottom: "1rem" }}>Validates images, converts to RGB JPEG, and applies sequential naming.</p>
-            <form onSubmit={startCleaning}>
+            <form onSubmit={startCleaning} style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
               <div className="form-group">
                 <label className="form-label">Source Directory</label>
                 <div className="input-with-browse">
@@ -361,7 +361,7 @@ function Cleaning() {
           <div className="cleaning-form card">
             <h2 className="form-title">Deduplication</h2>
             <p className="form-help" style={{ marginBottom: "1rem" }}>Finds and isolates identical or near-identical images.</p>
-            <form onSubmit={startDeduplication} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <form onSubmit={startDeduplication} style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
               <div className="form-group">
                 <label className="form-label">Source Directory</label>
                 <div className="input-with-browse">

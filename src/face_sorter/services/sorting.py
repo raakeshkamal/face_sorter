@@ -192,7 +192,7 @@ def match_faces_to_classes(
     imgembeddings: list[list[float]],
     classembeddings: list[np.ndarray],
     classname: list[str],
-) -> tuple[list[int], list[str], list[list[float]], list[int]]:
+) -> tuple[list[int], list[str], list[list[float]], list[int], dict[int, float]]:
     """
     Match faces to known classes using FAISS.
 
@@ -207,6 +207,7 @@ def match_faces_to_classes(
             - sorted_class_names: Class names for sorted images
             - unsorted_embeddings: Embeddings of unsorted images
             - unsorted_ids: Indices of unsorted images
+            - match_similarities: Dictionary mapping face index to FAISS similarity score
     """
     # Convert to numpy arrays
     imgembeddings_arr = np.asarray(imgembeddings, dtype=np.float32)
@@ -217,7 +218,7 @@ def match_faces_to_classes(
 
     # Create FAISS index for classes
     if classembeddings_arr.shape[0] == 0:
-        return [], [], imgembeddings, list(range(len(imgembeddings)))
+        return [], [], imgembeddings, list(range(len(imgembeddings))), {}
 
     index = faiss.IndexFlatIP(classembeddings_arr.shape[1])
     faiss.normalize_L2(classembeddings_arr)
@@ -231,6 +232,7 @@ def match_faces_to_classes(
     sorted_class_names = []
     unsorted_ids = []
     unsorted_embeddings = []
+    match_similarities = {}
 
     threshold = get_settings().similarity_threshold
 
@@ -241,6 +243,7 @@ def match_faces_to_classes(
         if similarity >= threshold and class_idx != -1:
             sorted_ids.append(i)
             sorted_class_names.append(classname[class_idx])
+            match_similarities[i] = float(similarity)
         else:
             unsorted_ids.append(i)
             unsorted_embeddings.append(imgembeddings[i])
@@ -250,6 +253,7 @@ def match_faces_to_classes(
         sorted_class_names,
         unsorted_embeddings,
         unsorted_ids,
+        match_similarities,
     )
 
 
@@ -258,7 +262,7 @@ def cluster_unknown_faces(
     imgstabilityscores: list[Optional[float]],
     min_samples: Optional[int] = None,
     min_cluster_size: Optional[int] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, dict[int, float], dict[int, float]]:
     """
     Cluster unknown faces using HDBSCAN with stability-based sampling.
 
@@ -269,10 +273,14 @@ def cluster_unknown_faces(
         min_cluster_size: Minimum cluster size for HDBSCAN.
 
     Returns:
-        Tuple containing cluster labels and centroids.
+        Tuple containing:
+            - cluster_labels: Cluster assignment for each face
+            - centers_arr: Cluster centroids
+            - cluster_similarities: Average intra-cluster similarities
+            - centroid_similarities: Per-face similarity to cluster centroid
     """
     if not unsorted_embeddings:
-        return np.array([]), np.array([])
+        return np.array([]), np.array([]), {}, {}
 
     settings = get_settings()
     if min_samples is None:
@@ -446,24 +454,56 @@ def cluster_unknown_faces(
     # Calculate centroids in ORIGINAL space using ALL assigned points
     unique_labels = np.unique(cluster_labels)
     cluster_centers_dict = {}
+    cluster_similarities = {}
 
     for label in unique_labels:
         if label == -1:
             continue
         mask = cluster_labels == label
-        centroid = face_embeddings[mask].mean(axis=0)
+        cluster_embeddings = face_embeddings[mask]
+
+        # Calculate centroid
+        centroid = cluster_embeddings.mean(axis=0)
         centroid = centroid / (np.linalg.norm(centroid) + 1e-9)
         cluster_centers_dict[label] = centroid
 
+        # Calculate average intra-cluster similarity
+        if len(cluster_embeddings) > 1:
+            # Compute cosine similarity matrix
+            similarities = np.dot(cluster_embeddings, cluster_embeddings.T)
+            # Get upper triangle (excluding diagonal)
+            upper_triangle = np.triu(similarities, k=1)
+            avg_similarity = upper_triangle[np.triu_indices_from(similarities, k=1)].mean()
+        else:
+            avg_similarity = 1.0
+
+        cluster_similarities[label] = avg_similarity
+
     if not cluster_centers_dict:
-        return cluster_labels, np.array([])
+        return cluster_labels, np.array([]), {}, {}
 
     max_label = max(cluster_centers_dict.keys())
     centers_arr = np.zeros((max_label + 1, face_embeddings.shape[1]), dtype=np.float32)
     for label, center in cluster_centers_dict.items():
         centers_arr[label] = center
 
-    return cluster_labels, centers_arr
+    # Calculate per-face centroid similarities
+    centroid_similarities = {}
+    for label in unique_labels:
+        if label == -1:
+            continue
+        mask = cluster_labels == label
+        cluster_face_indices = np.where(mask)[0]
+        centroid = cluster_centers_dict[label]
+
+        # Calculate similarity of each face to centroid
+        for idx in cluster_face_indices:
+            # Cosine similarity = dot product since both are normalized
+            face_embedding = face_embeddings[idx]
+            similarity = float(np.dot(face_embedding, centroid))
+            centroid_similarities[idx] = similarity
+
+    return cluster_labels, centers_arr, cluster_similarities, centroid_similarities
 
 
 async def sort(
@@ -539,15 +579,24 @@ async def sort(
 
     # Match faces to classes in a separate thread
     logger.info("Matching faces to known classes...")
-    sorted_ids, sorted_class_names, unsorted_embeddings, unsorted_ids = await asyncio.to_thread(
-        match_faces_to_classes, imgembeddings, classembeddings, classname
-    )
+    (
+        sorted_ids,
+        sorted_class_names,
+        unsorted_embeddings,
+        unsorted_ids,
+        match_similarities,
+    ) = await asyncio.to_thread(match_faces_to_classes, imgembeddings, classembeddings, classname)
 
     logger.info(f"Sorted {len(sorted_ids)} faces into classes")
     logger.info(f"Found {len(unsorted_embeddings)} unsorted faces")
 
     if cancellation_event and cancellation_event.is_set():
         return
+
+    # Store match similarities for matched faces
+    face_repo = FaceRepository()
+    for face_idx, similarity in match_similarities.items():
+        await face_repo.update_face_similarities(face_idx=face_idx, match_similarity=similarity)
 
     # Sort faces by class
     if sorted_ids:
@@ -578,7 +627,12 @@ async def sort(
         # Filter stability scores for unsorted faces
         unsorted_stability_scores = [imgstabilityscores[idx] for idx in unsorted_ids]
 
-        cluster_labels, cluster_centers = await asyncio.to_thread(
+        (
+            cluster_labels,
+            cluster_centers,
+            cluster_similarities,
+            centroid_similarities,
+        ) = await asyncio.to_thread(
             cluster_unknown_faces,
             unsorted_embeddings,
             unsorted_stability_scores,
@@ -623,10 +677,19 @@ async def sort(
                     cluster_id=results,
                     indices=real_indices,
                     centroid=centroid,
+                    avg_similarity=float(cluster_similarities.get(label, 0.0)),
                 )
 
                 # Update face documents with cluster ID
                 await face_repo.update_faces_cluster(real_indices, results)
+
+                # Update centroid similarities for faces in this cluster
+                for idx in indices:
+                    real_idx = unsorted_ids[idx]
+                    similarity = centroid_similarities.get(idx, 0.0)
+                    await face_repo.update_face_similarities(
+                        face_idx=real_idx, centroid_similarity=similarity
+                    )
 
                 # Get data for this cluster
                 cluster_imgs = [imgname[idx] for idx in real_indices]

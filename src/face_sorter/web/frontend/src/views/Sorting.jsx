@@ -395,11 +395,12 @@ function Sorting() {
                 </div>
               ))}
             </div>
-            <div className="form-actions">
-               <button className="btn btn-secondary" onClick={handleReset}>
-                  Start New Sorting
-               </button>
-            </div>
+          </div>
+
+          <div className="results-actions">
+             <button className="btn btn-secondary" onClick={handleReset}>
+                Start New Sorting
+             </button>
           </div>
         </div>
       )}

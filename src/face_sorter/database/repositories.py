@@ -149,6 +149,30 @@ class FaceRepository:
         collection = await self._get_collection()
         await collection.update_many({"idx": {"$in": indices}}, {"$set": {"cluster": cluster_id}})
 
+    async def update_face_similarities(
+        self,
+        face_idx: int,
+        match_similarity: Optional[float] = None,
+        centroid_similarity: Optional[float] = None,
+    ) -> None:
+        """
+        Update similarity scores for a face.
+
+        Args:
+            face_idx: Face index (database idx field).
+            match_similarity: FAISS cosine similarity to matched class (if matched).
+            centroid_similarity: Similarity to cluster centroid (if clustered).
+        """
+        collection = await self._get_collection()
+        update_doc = {}
+        if match_similarity is not None:
+            update_doc["match_similarity"] = float(match_similarity)
+        if centroid_similarity is not None:
+            update_doc["centroid_similarity"] = float(centroid_similarity)
+
+        if update_doc:
+            await collection.update_one({"idx": face_idx}, {"$set": update_doc})
+
     async def clear_all_clusters(self) -> None:
         """Remove cluster labels from all faces."""
         collection = await self._get_collection()
@@ -369,15 +393,17 @@ class ClusterRepository:
         cluster_id: int,
         indices: list[int],
         centroid: list[float],
+        avg_similarity: float = 0.0,
     ) -> None:
         """
-        Insert a cluster into the database.
+        Insert a cluster into database.
 
         Args:
             cluster_name: Original cluster label.
             cluster_id: Sequential cluster ID.
-            indices: List of image indices in the cluster.
+            indices: List of image indices in cluster.
             centroid: Cluster centroid embedding.
+            avg_similarity: Average intra-cluster similarity.
         """
         collection = await self._get_collection()
         cluster_info = {
@@ -385,6 +411,7 @@ class ClusterRepository:
             "cluster_id": cluster_id,
             "indices": indices,
             "centroid": centroid,
+            "avg_similarity": float(avg_similarity),
         }
         await collection.insert_one(cluster_info)
 

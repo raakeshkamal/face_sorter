@@ -48,6 +48,8 @@
 .cleaning-form {
   max-width: 900px;
   margin-bottom: 30px;
+  display: flex;
+  flex-direction: column;
 }
 
 .form-title {

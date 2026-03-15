@@ -21,10 +21,12 @@ class ClusterResponse(BaseModel):
     cluster_id: int
     cluster_name: int
     size: int
+    avg_similarity: float = 0.0
     preview_faces: list[ImageResponse] = []
 
     class Config:
         """Pydantic config for ClusterResponse."""
+
         from_attributes = True
 
 
@@ -40,15 +42,15 @@ async def get_clusters(
     """
     cluster_repo = ClusterRepository()
     face_repo = FaceRepository()
-    
+
     clusters = await cluster_repo.get_all_clusters()
-    
+
     # Sort by size (indices length) descending
     clusters.sort(key=lambda x: len(x.get("indices", [])), reverse=True)
-    
+
     # Take only requested limit
     clusters = clusters[:limit]
-    
+
     result = []
     for cluster in clusters:
         # Get up to 4 preview faces for each cluster
@@ -58,14 +60,17 @@ async def get_clusters(
             face = await face_repo.get_face_by_idx(idx)
             if face:
                 preview_faces.append(ImageResponse(**face))
-                
-        result.append(ClusterResponse(
-            cluster_id=cluster["cluster_id"],
-            cluster_name=cluster["cluster_name"],
-            size=len(cluster.get("indices", [])),
-            preview_faces=preview_faces
-        ))
-        
+
+        result.append(
+            ClusterResponse(
+                cluster_id=cluster["cluster_id"],
+                cluster_name=cluster["cluster_name"],
+                size=len(cluster.get("indices", [])),
+                avg_similarity=cluster.get("avg_similarity", 0.0),
+                preview_faces=preview_faces,
+            )
+        )
+
     return result
 
 
@@ -87,12 +92,10 @@ async def get_cluster_images(
         List of image responses.
     """
     face_repo = FaceRepository()
-    
+
     # Use the cluster field we added to the Face model
     query = {"cluster": cluster_id}
-    
-    faces = await face_repo.get_faces_paginated(
-        query=query, skip=skip, limit=limit
-    )
-    
+
+    faces = await face_repo.get_faces_paginated(query=query, skip=skip, limit=limit)
+
     return [ImageResponse(**face) for face in faces]

@@ -69,7 +69,7 @@ class Settings(BaseSettings):
         description="Quality setting for cached images (1-100)",
     )
     similarity_threshold: float = Field(
-        default=0.75,
+        default=0.85,
         ge=0.0,
         le=1.0,
         description="Cosine similarity threshold for face matching",
@@ -192,7 +192,15 @@ class Settings(BaseSettings):
     )
     clean_extensions: list[str] = Field(
         default_factory=lambda: [
-            '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp', '.gif', '.heic', '.heif'
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".tiff",
+            ".webp",
+            ".gif",
+            ".heic",
+            ".heif",
         ],
         description="Image file extensions to process",
     )
@@ -211,14 +219,16 @@ class Settings(BaseSettings):
     @classmethod
     def validate_clean_extensions(cls, v: list[str]) -> list[str]:
         """Remove HEIC/HEIF extensions if pillow-heif is not available."""
-        heif_extensions = {'.heic', '.heif'}
+        heif_extensions = {".heic", ".heif"}
         if any(ext.lower() in heif_extensions for ext in v):
             try:
                 import pillow_heif
+
                 pillow_heif.register_heif_opener()
                 return v
             except ImportError:
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.warning("pillow-heif not available, HEIC/HEIF files will be skipped")
                 return [ext for ext in v if ext.lower() not in heif_extensions]

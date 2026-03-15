@@ -23,6 +23,12 @@ class ImageResponse(BaseModel):
     cache_url: Optional[str] = None
     bbox: list[int]
     det_score: float
+    match_similarity: Optional[float] = Field(
+        default=None, description="FAISS matching score to class"
+    )
+    centroid_similarity: Optional[float] = Field(
+        default=None, description="Similarity to cluster centroid"
+    )
     age: Optional[int] = None
     gender: Optional[int] = None
     stability_score: Optional[float] = None
@@ -39,6 +45,7 @@ class ImageResponse(BaseModel):
 
     class Config:
         """Pydantic config for ImageResponse."""
+
         populate_by_name = True
         from_attributes = True
 
@@ -70,6 +77,8 @@ async def get_images(
         "cache_url": 1,
         "bbox": 1,
         "det_score": 1,
+        "match_similarity": 1,
+        "centroid_similarity": 1,
         "age": 1,
         "gender": 1,
         "stability_score": 1,
@@ -135,6 +144,8 @@ async def get_unsorted_images(
         "cache_url": 1,
         "bbox": 1,
         "det_score": 1,
+        "match_similarity": 1,
+        "centroid_similarity": 1,
         "age": 1,
         "gender": 1,
         "stability_score": 1,
