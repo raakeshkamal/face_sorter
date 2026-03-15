@@ -22,6 +22,7 @@ class ClusterResponse(BaseModel):
     cluster_name: int
     size: int
     avg_similarity: float = 0.0
+    class_name: Optional[str] = None
     preview_faces: list[ImageResponse] = []
 
     class Config:
@@ -67,6 +68,7 @@ async def get_clusters(
                 cluster_name=cluster["cluster_name"],
                 size=len(cluster.get("indices", [])),
                 avg_similarity=cluster.get("avg_similarity", 0.0),
+                class_name=cluster.get("class_name"),
                 preview_faces=preview_faces,
             )
         )

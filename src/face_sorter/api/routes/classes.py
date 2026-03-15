@@ -9,7 +9,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from face_sorter.database.repositories import ClassRepository, ClusterRepository
+from face_sorter.database.repositories import ClassRepository, ClusterRepository, FaceRepository
+from face_sorter.api.routes.images import ImageResponse
 
 router = APIRouter()
 
@@ -35,7 +36,16 @@ class ClassResponse(BaseModel):
 
     class Config:
         """Pydantic config for ClassResponse."""
+
         from_attributes = True
+
+
+class ClassSummary(BaseModel):
+    """Summary response for a class with preview faces."""
+
+    class_name: str
+    face_count: int
+    preview_faces: list[ImageResponse] = []
 
 
 @router.get("", response_model=list[ClassResponse])
@@ -49,6 +59,33 @@ async def get_classes() -> list[ClassResponse]:
     class_repo = ClassRepository()
     class_names = await class_repo.get_all_class_names()
     return [ClassResponse(class_name=name) for name in class_names]
+
+
+@router.get("/summary", response_model=list[ClassSummary])
+async def get_class_summaries() -> list[ClassSummary]:
+    """
+    Get summaries for all face classes.
+
+    Returns:
+        List of class summaries including counts and preview faces.
+    """
+    class_repo = ClassRepository()
+    face_repo = FaceRepository()
+
+    class_names = await class_repo.get_all_class_names()
+
+    result = []
+    for name in class_names:
+        count = await face_repo.count_faces_in_class(name)
+        # Get up to 4 preview faces for each class
+        faces = await face_repo.get_faces_paginated(query={"class": name}, limit=4)
+        preview_faces = [ImageResponse(**face) for face in faces]
+
+        result.append(ClassSummary(class_name=name, face_count=count, preview_faces=preview_faces))
+
+    # Sort classes by face count descending
+    result.sort(key=lambda x: x.face_count, reverse=True)
+    return result
 
 
 @router.post("", response_model=ClassResponse)
@@ -81,21 +118,30 @@ async def create_class(
     if isinstance(request, CreateClassRequest):
         # Fetch embedding from cluster
         cluster_repo = ClusterRepository()
+        face_repo = FaceRepository()
         cluster = await cluster_repo.get_cluster(request.cluster_id)
         if not cluster:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Cluster {request.cluster_id} not found",
             )
-        
+
         centroid = cluster.get("centroid", [])
         if not centroid:
-             raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cluster {request.cluster_id} has no centroid data",
             )
-            
+
         await class_repo.insert_class(request.class_name, centroid)
+
+        # Update cluster with assigned class name
+        await cluster_repo.update_cluster_class(request.cluster_id, request.class_name)
+
+        # Update all faces in the cluster with the class name
+        indices = cluster.get("indices", [])
+        if indices:
+            await face_repo.update_faces_class(indices, request.class_name)
     else:
         # Create with explicit embedding
         await class_repo.insert_class(request.class_name, request.embedding)

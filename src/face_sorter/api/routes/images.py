@@ -58,6 +58,7 @@ async def get_images(
     skip: int = Query(0, ge=0, description="Number of images to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of images to return"),
     cluster_id: Optional[int] = Query(None, description="Filter by cluster ID"),
+    class_name: Optional[str] = Query(None, description="Filter by class name"),
 ) -> list[ImageResponse]:
     """
     Get paginated list of face images.
@@ -66,6 +67,7 @@ async def get_images(
         skip: Number of images to skip (pagination).
         limit: Number of images to return.
         cluster_id: Optional cluster ID to filter by.
+        class_name: Optional class name to filter by.
 
     Returns:
         List of image responses with metadata.
@@ -90,8 +92,12 @@ async def get_images(
         "content_probability": 1,
     }
 
-    # Build query if cluster_id is provided
-    query = {"cluster": cluster_id} if cluster_id is not None else {}
+    # Build query
+    query = {}
+    if cluster_id is not None:
+        query["cluster"] = cluster_id
+    if class_name is not None:
+        query["class"] = class_name
 
     faces = await face_repo.get_faces_paginated(
         query=query, projection=projection, skip=skip, limit=limit

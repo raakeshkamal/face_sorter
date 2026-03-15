@@ -45,9 +45,8 @@ async def compress_image(
         img = await asyncio.to_thread(img.resize, img.size, Image.Resampling.LANCZOS)
 
         # Save image (PIL is blocking)
-        await asyncio.to_thread(
-            img.save, output_path, "JPEG", quality=quality, optimize=optimize
-        )
+        await asyncio.to_thread(img.save, output_path, "JPEG", quality=quality, optimize=optimize)
+        img.close()
         return True
     except Exception as e:
         logger.error(f"Error compressing image {input_path}: {e}")
@@ -91,6 +90,7 @@ async def draw_bounding_box(
             img.save(output_path, "JPEG", quality=75, optimize=True)
 
         await asyncio.to_thread(_draw)
+        img.close()
         return True
     except Exception as e:
         logger.error(f"Error drawing bounding box on {image_path}: {e}")
@@ -133,6 +133,7 @@ async def crop_face(
             cropped.save(output_path, "JPEG", quality=95)
 
         await asyncio.to_thread(_crop)
+        img.close()
         return True
     except Exception as e:
         logger.error(f"Error cropping face from {image_path}: {e}")
@@ -151,7 +152,9 @@ async def get_image_size(image_path: str) -> Optional[Tuple[int, int]]:
     """
     try:
         img = await async_read_image(image_path)
-        return img.size
+        size = img.size
+        img.close()
+        return size
     except Exception as e:
         logger.error(f"Error getting size of {image_path}: {e}")
         return None
@@ -175,6 +178,7 @@ async def is_valid_image(image_path: str) -> bool:
             img.verify()
 
         await asyncio.to_thread(_verify)
+        img.close()
         return True
     except Exception as e:
         logger.debug(f"Invalid image {image_path}: {e}")
@@ -206,6 +210,7 @@ async def convert_to_rgb(image_path: str, output_path: str) -> bool:
             img.save(output_path, "JPEG", quality=95)
 
         await asyncio.to_thread(_convert)
+        img.close()
         return True
     except Exception as e:
         logger.error(f"Error converting {image_path} to RGB: {e}")

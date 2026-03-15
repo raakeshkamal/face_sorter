@@ -8,10 +8,14 @@ function ImageGallery({ images = [], loading = false, cacheBaseUrl = '/images', 
 
   const getImageUrl = useCallback((image) => {
     if (!image) return '';
-    if (image.cache_url) {
-      return `${cacheBaseUrl}/${image.cache_url}`;
+    // Try full path first, then cache_url, then filename
+    if (image.path) {
+      return `${cacheBaseUrl}/${encodeURIComponent(image.path)}`;
     }
-    return `${cacheBaseUrl}/${image.filename}`;
+    if (image.cache_url) {
+      return `${cacheBaseUrl}/${encodeURIComponent(image.cache_url)}`;
+    }
+    return `${cacheBaseUrl}/${encodeURIComponent(image.filename)}`;
   }, [cacheBaseUrl]);
 
   const handleImageClick = (image, index) => {

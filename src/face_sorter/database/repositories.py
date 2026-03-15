@@ -93,6 +93,19 @@ class FaceRepository:
         collection = await self._get_collection()
         return await collection.count_documents({})
 
+    async def count_faces_in_class(self, class_name: str) -> int:
+        """
+        Count faces belonging to a class.
+
+        Args:
+            class_name: Name of the class.
+
+        Returns:
+            Number of faces.
+        """
+        collection = await self._get_collection()
+        return await collection.count_documents({"class": class_name})
+
     async def get_face_by_idx(self, idx: int) -> Optional[dict[str, Any]]:
         """
         Get a single face by index.
@@ -148,6 +161,17 @@ class FaceRepository:
         """
         collection = await self._get_collection()
         await collection.update_many({"idx": {"$in": indices}}, {"$set": {"cluster": cluster_id}})
+
+    async def update_faces_class(self, indices: list[int], class_name: str) -> None:
+        """
+        Update multiple faces with a class name.
+
+        Args:
+            indices: List of face indices (idx).
+            class_name: Class name to assign.
+        """
+        collection = await self._get_collection()
+        await collection.update_many({"idx": {"$in": indices}}, {"$set": {"class": class_name}})
 
     async def update_face_similarities(
         self,
@@ -409,6 +433,7 @@ class ClusterRepository:
         indices: list[int],
         centroid: list[float],
         avg_similarity: float = 0.0,
+        class_name: Optional[str] = None,
     ) -> None:
         """
         Insert a cluster into database.
@@ -419,6 +444,7 @@ class ClusterRepository:
             indices: List of image indices in cluster.
             centroid: Cluster centroid embedding.
             avg_similarity: Average intra-cluster similarity.
+            class_name: Optional assigned class name.
         """
         collection = await self._get_collection()
         cluster_info = {
@@ -428,7 +454,24 @@ class ClusterRepository:
             "centroid": centroid,
             "avg_similarity": float(avg_similarity),
         }
+        if class_name:
+            cluster_info["class_name"] = class_name
+            
         await collection.insert_one(cluster_info)
+
+    async def update_cluster_class(self, cluster_id: int, class_name: str) -> None:
+        """
+        Update the assigned class name for a cluster.
+
+        Args:
+            cluster_id: Cluster ID.
+            class_name: Assigned class name.
+        """
+        collection = await self._get_collection()
+        await collection.update_one(
+            {"cluster_id": cluster_id},
+            {"$set": {"class_name": class_name}}
+        )
 
     async def get_cluster(self, cluster_id: int) -> Optional[dict[str, Any]]:
         """

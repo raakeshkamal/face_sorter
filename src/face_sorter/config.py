@@ -95,6 +95,32 @@ class Settings(BaseSettings):
         description="Batch size for processing images",
     )
 
+    # Concurrency Limits (to prevent "Too many open files" errors)
+    max_concurrent_file_ops: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum concurrent file operations (prevents OS file descriptor limits)",
+    )
+    sort_concurrent_limit: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Concurrent images in sort operations",
+    )
+    cache_concurrent_limit: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description="Concurrent images during caching",
+    )
+    clean_concurrent_limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Concurrent images during cleaning",
+    )
+
     # Deduplication Settings
     dedup_model_name: str = Field(
         default="openai/clip-vit-base-patch32",

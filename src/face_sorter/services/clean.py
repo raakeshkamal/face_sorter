@@ -122,6 +122,7 @@ async def process_single_image(
             rgb_img.save(output_path_abs, "JPEG", quality=quality, optimize=True)
 
         await asyncio.to_thread(_convert)
+        img.close()
         return True
 
     except Exception as e:
@@ -161,6 +162,9 @@ async def process_batch(
     failed = 0
     current_index = start_index
 
+    # Create semaphore to limit concurrent file operations
+    semaphore = asyncio.Semaphore(get_settings().clean_concurrent_limit)
+
     # Create tasks for batch processing
     tasks = []
     for input_path in batch:
@@ -169,10 +173,14 @@ async def process_batch(
         tasks.append((input_path, output_path))
         current_index += 1
 
-    # Process batch in parallel
+    # Process batch in parallel with semaphore limit
+    async def process_with_semaphore(input_path, output_path, broken_dir, quality):
+        async with semaphore:
+            return await process_single_image(input_path, output_path, broken_dir, quality)
+
     results = await asyncio.gather(
         *[
-            process_single_image(input_path, output_path, broken_dir, quality)
+            process_with_semaphore(input_path, output_path, broken_dir, quality)
             for input_path, output_path in tasks
         ],
         return_exceptions=True,
@@ -280,7 +288,7 @@ async def clean_dataset(
     # Use provided directories or derive from source_dir parent
     if not source_dir:
         source_dir = settings.source_dir
-    
+
     src_path = Path(source_dir).resolve()
     parent_dir = src_path.parent
 
@@ -288,7 +296,7 @@ async def clean_dataset(
         output_dir = str(parent_dir / "cleaned")
     if not broken_dir:
         broken_dir = str(parent_dir / "clean_broken")
-    
+
     if not batch_size:
         batch_size = settings.clean_batch_size
     if not img_prefix:
@@ -297,7 +305,7 @@ async def clean_dataset(
         quality = settings.clean_quality
     if recursive is None:  # keep is None for booleans
         recursive = settings.clean_recursive
-    if start_index is None: # keep is None for start_index which could be 0
+    if start_index is None:  # keep is None for start_index which could be 0
         start_index = settings.clean_start_index
 
     logger.info(f"Starting dataset cleaning from {source_dir}")
@@ -352,9 +360,7 @@ async def clean_dataset(
 
         batch_num = i // batch_size + 1
         total_batches = (total + batch_size - 1) // batch_size
-        logger.info(
-            f"Processing batch {batch_num}/{total_batches} ({len(batch)} images)"
-        )
+        logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} images)")
 
         batch_successful, batch_failed, next_index = await process_batch(
             batch,
@@ -390,8 +396,7 @@ async def clean_dataset(
     if processed > 0:
         logger.info(f"  Success rate: {successful / processed * 100:.1f}%")
     logger.info(
-        f"  Output range: {img_prefix}_{start_index:04d}.jpg "
-        f"to {img_prefix}_{end_index:04d}.jpg"
+        f"  Output range: {img_prefix}_{start_index:04d}.jpg to {img_prefix}_{end_index:04d}.jpg"
     )
 
     # Report final progress

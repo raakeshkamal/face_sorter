@@ -45,6 +45,11 @@ async def add_new_class(class_name: str, cluster_id: int) -> None:
 
     class_repo = ClassRepository()
     await class_repo.insert_class(class_name, cluster["centroid"])
+    
+    # Update all faces in this cluster with the class name
+    face_repo = FaceRepository()
+    await face_repo.update_faces_class(cluster["indices"], class_name)
+    
     logger.info(f"Added class '{class_name}' from cluster {cluster_id}")
 
 
@@ -102,6 +107,7 @@ async def process_image(img_url: str, expanded_path: str, bbox: np.ndarray) -> N
             img.save(img_url, "JPEG", quality=75, optimize=True)
 
         await asyncio.to_thread(_draw)
+        img.close()
     except Exception as e:
         logger.error(f"Error processing image {expanded_path}: {e}")
 
@@ -132,7 +138,14 @@ async def sort_faces_by_class(
         unique_class_paths[class_name] = path
         await async_makedirs(path, exist_ok=True)
 
-    # Process files in parallel using asyncio.gather
+    # Create semaphore to limit concurrent file operations
+    semaphore = asyncio.Semaphore(get_settings().sort_concurrent_limit)
+
+    # Process files in parallel using asyncio.gather with semaphore limit
+    async def process_with_semaphore(img_path, expanded_path, bbox):
+        async with semaphore:
+            return await process_image(img_path, expanded_path, bbox)
+
     tasks = []
     for index, i in enumerate(sorted_ids):
         class_name = sorted_class_names[index]
@@ -144,7 +157,7 @@ async def sort_faces_by_class(
         expanded_path = os.path.expanduser(source_cache_path)
         bbox = np.array(imgbbox[i]).astype(np.int32)
 
-        tasks.append(process_image(img_path, expanded_path, bbox))
+        tasks.append(process_with_semaphore(img_path, expanded_path, bbox))
 
     # Wait for all tasks to complete
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -172,7 +185,14 @@ async def show_results(
     cache_path = os.path.expanduser(os.path.join(cache_dir, "clusters", str(label)))
     await async_makedirs(cache_path, exist_ok=True)
 
-    # Process images in parallel using asyncio.gather
+    # Create semaphore to limit concurrent file operations
+    semaphore = asyncio.Semaphore(get_settings().sort_concurrent_limit)
+
+    # Process images in parallel using asyncio.gather with semaphore limit
+    async def process_with_semaphore(cache_url, expanded_path, bbox):
+        async with semaphore:
+            return await process_image(cache_url, expanded_path, bbox)
+
     tasks = []
     for i in range(len(cluster_imgs)):
         cache_url = os.path.join(cache_path, cluster_imgs[i])
@@ -181,7 +201,7 @@ async def show_results(
         expanded_path = os.path.expanduser(source_cache_path)
         bbox = np.array(cluster_bbox[i]).astype(np.int32)
 
-        tasks.append(process_image(cache_url, expanded_path, bbox))
+        tasks.append(process_with_semaphore(cache_url, expanded_path, bbox))
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -625,6 +645,20 @@ async def sort(
     face_repo = FaceRepository()
     for face_idx, similarity in match_similarities.items():
         await face_repo.update_face_similarities(face_idx=face_idx, match_similarity=similarity)
+
+    # Update class name for matched faces
+    if sorted_ids:
+        # Group indices by class for efficient bulk update
+        class_to_indices = {}
+        for idx_in_sorted, face_idx in enumerate(sorted_ids):
+            class_name_assigned = sorted_class_names[idx_in_sorted]
+            # Use the real database index (idx) which is what imgembeddings indices correspond to
+            if class_name_assigned not in class_to_indices:
+                class_to_indices[class_name_assigned] = []
+            class_to_indices[class_name_assigned].append(face_idx)
+        
+        for class_name_to_update, indices_to_update in class_to_indices.items():
+            await face_repo.update_faces_class(indices_to_update, class_name_to_update)
 
     # Sort faces by class
     if sorted_ids:

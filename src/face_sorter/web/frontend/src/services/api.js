@@ -39,6 +39,18 @@ export const apiService = {
     return response.data;
   },
 
+  async getClassSummaries() {
+    const response = await api.get("/classes/summary");
+    return response.data;
+  },
+
+  async getClassImages(className, params = {}) {
+    const response = await api.get("/images", { 
+      params: { ...params, class_name: className } 
+    });
+    return response.data;
+  },
+
   async createClass(data) {
     const response = await api.post("/classes", data);
     return response.data;

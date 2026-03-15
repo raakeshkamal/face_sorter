@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import './Classes.css';
+import ImageGallery from '../components/ImageGallery.jsx';
 import { apiService } from '../services/api';
 
 function Classes() {
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Gallery state
+  const [showGallery, setShowGallery] = useState(false);
+  const [selectedClass, setSelectedClass] = useState(null);
+  const [classImages, setClassImages] = useState([]);
+  const [loadingImages, setLoadingImages] = useState(false);
+
   const loadClasses = async () => {
     try {
       setLoading(true);
-      const data = await apiService.getClasses();
+      const data = await apiService.getClassSummaries();
       setClasses(data);
     } catch (error) {
       console.error('Failed to load classes:', error);
@@ -22,8 +29,19 @@ function Classes() {
     loadClasses();
   }, []);
 
-  const viewClass = (classItem) => {
-    console.log('View class:', classItem.class_name);
+  const viewClass = async (classItem) => {
+    setSelectedClass(classItem);
+    setShowGallery(true);
+    setLoadingImages(true);
+    try {
+      const images = await apiService.getClassImages(classItem.class_name, { limit: 1000 });
+      setClassImages(images);
+    } catch (error) {
+      console.error('Failed to fetch class images:', error);
+      window.alert('Failed to load class images.');
+    } finally {
+      setLoadingImages(false);
+    }
   };
 
   const deleteClass = async (classItem) => {
@@ -36,6 +54,13 @@ function Classes() {
         window.alert('Failed to delete class');
       }
     }
+  };
+
+  const getImageUrl = (face) => {
+    // Try full path first, then cache_url, then filename
+    if (face.path) return `/images/${encodeURIComponent(face.path)}`;
+    if (face.cache_url) return `/images/${encodeURIComponent(face.cache_url)}`;
+    return `/images/${encodeURIComponent(face.filename || '')}`;
   };
 
   return (
@@ -60,8 +85,42 @@ function Classes() {
           {classes.map((classItem) => (
             <div key={classItem.class_name} className="card class-card">
               <div className="class-header">
-                <span className="class-icon">👥</span>
-                <h3 className="class-name">{classItem.class_name}</h3>
+                <div className="class-title">
+                  <h3 className="class-name">{classItem.class_name}</h3>
+                  <span className="class-count-badge">{classItem.face_count} faces</span>
+                </div>
+              </div>
+              <div className="class-preview collage">
+                {classItem.preview_faces.length > 0 ? (
+                  <>
+                    <div className="collage-main">
+                      {classItem.preview_faces[0] && (
+                        <img
+                          src={getImageUrl(classItem.preview_faces[0])}
+                          className="class-image main"
+                          loading="lazy"
+                          alt="Class main face"
+                        />
+                      )}
+                    </div>
+                    <div className="collage-side">
+                      {classItem.preview_faces.slice(1, 4).map((face, index) => (
+                        <img
+                          key={index}
+                          src={getImageUrl(face)}
+                          className="class-image side"
+                          loading="lazy"
+                          alt="Class side face"
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="class-preview-empty">
+                    <span className="empty-icon">📷</span>
+                    <p>No preview images</p>
+                  </div>
+                )}
               </div>
               <div className="class-actions">
                 <button className="btn btn-secondary" onClick={() => viewClass(classItem)}>
@@ -73,6 +132,25 @@ function Classes() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {showGallery && (
+        <div className="modal-backdrop" onClick={() => setShowGallery(false)}>
+          <div className="modal-content full-screen" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <h2>Class: {selectedClass?.class_name} ({selectedClass?.face_count} faces)</h2>
+              </div>
+              <button className="modal-close" onClick={() => setShowGallery(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <ImageGallery 
+                images={classImages} 
+                loading={loadingImages} 
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

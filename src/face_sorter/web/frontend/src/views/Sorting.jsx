@@ -26,7 +26,21 @@ function Sorting() {
     clusters: [],
   });
 
-  // Simplified state for removing progress bar
+  // Progress state
+  const [progress, setProgress] = useState({
+    current: 0,
+    total: 100,
+    statusText: '',
+    currentItem: '',
+  });
+
+  // Cluster assignment state
+  const [assigningClusterId, setAssigningClusterId] = useState(null);
+  const [newClassName, setNewClassName] = useState('');
+  const [existingClasses, setExistingClasses] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Operation status state
   const [status, setStatus] = useState('idle');
 
   // Gallery state
@@ -61,6 +75,12 @@ function Sorting() {
   const handleMessage = (data) => {
     switch (data.type) {
       case 'progress':
+        setProgress({
+          current: data.progress.current,
+          total: data.progress.total,
+          statusText: data.progress.status,
+          currentItem: data.progress.current_item || '',
+        });
         if (data.progress.status === 'Complete') {
           setStatus('complete');
           fetchResults();
@@ -68,6 +88,7 @@ function Sorting() {
         break;
       case 'complete':
         setStatus('complete');
+        setProgress(prev => ({ ...prev, current: prev.total, statusText: 'Complete' }));
         fetchResults();
         break;
       case 'error':
@@ -88,7 +109,9 @@ function Sorting() {
       setLoading(true);
       const clusters = await apiService.getClusters(form.max_results);
       const overview = await apiService.getOverview();
+      const classes = await apiService.getClasses();
       
+      setExistingClasses(classes);
       setResults({
         total_clusters: clusters.length,
         total_faces: overview.total_faces,
@@ -96,7 +119,8 @@ function Sorting() {
         clusters: clusters.map(c => ({
           id: c.cluster_id,
           size: c.size,
-          faces: c.preview_faces
+          faces: c.preview_faces,
+          class_name: c.class_name
         })),
       });
       setShowResults(true);
@@ -148,8 +172,10 @@ function Sorting() {
   };
 
   const getImageUrl = (face) => {
-    if (face.cache_url) return `/images/${face.cache_url}`;
-    return `/images/${face.filename || face.path}`;
+    // Try full path first, then cache_url, then filename
+    if (face.path) return `/images/${encodeURIComponent(face.path)}`;
+    if (face.cache_url) return `/images/${encodeURIComponent(face.cache_url)}`;
+    return `/images/${encodeURIComponent(face.filename || '')}`;
   };
 
   const viewCluster = async (cluster) => {
@@ -167,24 +193,37 @@ function Sorting() {
     }
   };
 
-  const assignToClass = async (cluster) => {
-    const className = window.prompt(`Enter class name for Cluster #${cluster.id}:`);
-    if (!className) return;
+  const startAssignToClass = (cluster) => {
+    setAssigningClusterId(cluster.id);
+    setNewClassName('');
+  };
+
+  const cancelAssignment = () => {
+    setAssigningClusterId(null);
+    setNewClassName('');
+  };
+
+  const handleConfirmAssignment = async (clusterId) => {
+    if (!newClassName.trim()) {
+      window.alert('Please enter a class name.');
+      return;
+    }
 
     try {
-      setLoading(true);
+      setIsSaving(true);
       await apiService.createClass({
-        class_name: className,
-        cluster_id: cluster.id
+        class_name: newClassName.trim(),
+        cluster_id: clusterId
       });
-      window.alert(`Successfully assigned Cluster #${cluster.id} to class "${className}"`);
+      setAssigningClusterId(null);
+      setNewClassName('');
       // Refresh results to show updated class count
       fetchResults();
     } catch (error) {
       console.error('Failed to assign class:', error);
       window.alert(`Failed to assign class: ${error.response?.data?.detail || error.message}`);
     } finally {
-      setLoading(false);
+      setIsSaving(false);
     }
   };
 
@@ -318,16 +357,19 @@ function Sorting() {
           </form>
         </div>
       ) : !showResults ? (
-        <div className="sorting-loading card">
-          <div className="loading-content">
-            <div className="loading-spinner-large"></div>
-            <h2>Analyzing & Clustering Faces</h2>
-            <p>We are processing your embeddings to find similar faces. This can take several minutes for large datasets (30k+ images).</p>
-            <div className="loading-status">Status: <span>Working...</span></div>
-            <button className="btn btn-secondary" onClick={handleCancel} disabled={cancelling}>
-              {cancelling ? 'Stopping...' : 'Cancel Operation'}
-            </button>
-          </div>
+        <div className="sorting-progress-container card">
+          <ProgressBar
+            operationType="Face Sorting & Clustering"
+            taskId={taskId}
+            status={status}
+            current={progress.current}
+            total={progress.total}
+            currentStatus={progress.statusText}
+            currentItem={progress.currentItem}
+            onCancel={handleCancel}
+            onReset={handleReset}
+            cancelling={cancelling}
+          />
         </div>
       ) : null}
 
@@ -356,9 +398,14 @@ function Sorting() {
             <h3 className="section-title">Top Clusters</h3>
             <div className="clusters-grid">
               {results.clusters.map((cluster) => (
-                <div key={cluster.id} className="cluster-card card">
+                <div key={cluster.id} className={`cluster-card card ${cluster.class_name ? 'assigned' : ''}`}>
                   <div className="cluster-header">
-                    <span className="cluster-id">Cluster #{cluster.id}</span>
+                    <div className="cluster-title">
+                      <span className="cluster-id">Cluster #{cluster.id}</span>
+                      {cluster.class_name && (
+                        <span className="class-badge">🏷️ {cluster.class_name}</span>
+                      )}
+                    </div>
                     <span className="cluster-size">{cluster.size} faces</span>
                   </div>
                   <div className="cluster-preview collage">
@@ -385,12 +432,55 @@ function Sorting() {
                     </div>
                   </div>
                   <div className="cluster-actions">
-                    <button className="btn btn-secondary" onClick={() => viewCluster(cluster)}>
-                      🔍 View
-                    </button>
-                    <button className="btn btn-primary" onClick={() => assignToClass(cluster)}>
-                      🏷️ Assign
-                    </button>
+                    {assigningClusterId === cluster.id ? (
+                      <div className="assignment-ui">
+                        <div className="input-group">
+                          <input
+                            list="class-suggestions"
+                            type="text"
+                            className="assignment-input"
+                            placeholder="Class name..."
+                            value={newClassName}
+                            onChange={(e) => setNewClassName(e.target.value)}
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleConfirmAssignment(cluster.id);
+                              if (e.key === 'Escape') cancelAssignment();
+                            }}
+                          />
+                          <datalist id="class-suggestions">
+                            {existingClasses.map((cls) => (
+                              <option key={cls.class_name} value={cls.class_name} />
+                            ))}
+                          </datalist>
+                        </div>
+                        <div className="assignment-buttons">
+                          <button 
+                            className="btn btn-primary btn-sm" 
+                            onClick={() => handleConfirmAssignment(cluster.id)}
+                            disabled={isSaving}
+                          >
+                            {isSaving ? '...' : '✅'}
+                          </button>
+                          <button 
+                            className="btn btn-secondary btn-sm" 
+                            onClick={cancelAssignment}
+                            disabled={isSaving}
+                          >
+                            ❌
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <button className="btn btn-secondary" onClick={() => viewCluster(cluster)}>
+                          🔍 View
+                        </button>
+                        <button className="btn btn-primary" onClick={() => startAssignToClass(cluster)}>
+                          🏷️ {cluster.class_name ? 'Reassign' : 'Assign'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -409,7 +499,12 @@ function Sorting() {
         <div className="modal-backdrop" onClick={() => setShowGallery(false)}>
           <div className="modal-content full-screen" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Cluster #{selectedCluster?.id} Gallery ({selectedCluster?.size} faces)</h2>
+              <div className="modal-title-group">
+                <h2>Cluster #{selectedCluster?.id} Gallery ({selectedCluster?.size} faces)</h2>
+                {selectedCluster?.class_name && (
+                  <span className="modal-class-badge">🏷️ Assigned to: {selectedCluster.class_name}</span>
+                )}
+              </div>
               <button className="modal-close" onClick={() => setShowGallery(false)}>✕</button>
             </div>
             <div className="modal-body">
@@ -419,9 +514,41 @@ function Sorting() {
               />
             </div>
             <div className="modal-footer">
-               <button className="btn btn-primary" onClick={() => assignToClass(selectedCluster)}>
-                  Assign Cluster to Class
-               </button>
+               {assigningClusterId === selectedCluster?.id ? (
+                 <div className="assignment-ui-footer">
+                    <input
+                      list="class-suggestions"
+                      type="text"
+                      className="assignment-input"
+                      placeholder="Enter class name..."
+                      value={newClassName}
+                      onChange={(e) => setNewClassName(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleConfirmAssignment(selectedCluster.id);
+                        if (e.key === 'Escape') cancelAssignment();
+                      }}
+                    />
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={() => handleConfirmAssignment(selectedCluster.id)}
+                      disabled={isSaving}
+                    >
+                      {isSaving ? 'Assigning...' : 'Confirm Assignment'}
+                    </button>
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={cancelAssignment}
+                      disabled={isSaving}
+                    >
+                      Cancel
+                    </button>
+                 </div>
+               ) : (
+                 <button className="btn btn-primary" onClick={() => startAssignToClass(selectedCluster)}>
+                    {selectedCluster?.class_name ? 'Reassign Cluster to Class' : 'Assign Cluster to Class'}
+                 </button>
+               )}
             </div>
           </div>
         </div>

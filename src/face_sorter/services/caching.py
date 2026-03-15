@@ -35,9 +35,11 @@ async def compress_image(bkp: dict[str, Any], cache_dir: str, quality: int = 50)
         img = await async_read_image(bkp["path"])
 
         # Use provided cache_dir and filename from bkp to construct output path
-        filename = os.path.basename(bkp.get("cache_url") or bkp.get("item") or os.path.basename(bkp["path"]))
+        filename = os.path.basename(
+            bkp.get("cache_url") or bkp.get("item") or os.path.basename(bkp["path"])
+        )
         file_path = os.path.join(cache_dir, filename)
-        
+
         await async_makedirs(os.path.dirname(file_path), exist_ok=True)
 
         # Resize and save (PIL is blocking)
@@ -46,6 +48,7 @@ async def compress_image(bkp: dict[str, Any], cache_dir: str, quality: int = 50)
             img_resized.save(file_path, quality=quality, optimize=True)
 
         await asyncio.to_thread(_compress, img)
+        img.close()
         return True
     except Exception as e:
         logger.error(f"Error processing {bkp['path']}: {e}")
@@ -107,6 +110,9 @@ async def build_cache(
     total = len(unique_records)
     logger.info(f"Found {total} unique images to cache")
 
+    # Create semaphore to limit concurrent file operations
+    semaphore = asyncio.Semaphore(get_settings().cache_concurrent_limit)
+
     # Process images in parallel using asyncio.gather
     failed = 0
 
@@ -115,8 +121,12 @@ async def build_cache(
     for i in range(0, total, batch_size):
         batch = unique_records[i : i + batch_size]
 
-        # Create tasks for this batch
-        tasks = [compress_image(bkp, cache_dir, quality) for bkp in batch]
+        # Create tasks with semaphore limit for this batch
+        async def compress_with_semaphore(bkp, cache_dir, quality):
+            async with semaphore:
+                return await compress_image(bkp, cache_dir, quality)
+
+        tasks = [compress_with_semaphore(bkp, cache_dir, quality) for bkp in batch]
 
         # Process batch in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -166,9 +176,7 @@ def clear_and_recreate_cache_sync(cache_dir: str) -> None:
     return asyncio.run(clear_and_recreate_cache(cache_dir))
 
 
-def build_cache_sync(
-    cache_dir: Optional[str] = None, quality: Optional[int] = None
-) -> CacheResult:
+def build_cache_sync(cache_dir: Optional[str] = None, quality: Optional[int] = None) -> CacheResult:
     """
     Synchronous wrapper for build_cache.
 

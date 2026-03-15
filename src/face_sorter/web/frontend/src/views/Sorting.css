@@ -162,10 +162,10 @@
 }
 
 /* Progress Section */
-.progress-section {
-  margin-bottom: 30px;
+.sorting-progress-container {
   max-width: 900px;
-  clear: both;
+  margin: 0 auto 30px auto;
+  padding: 40px;
 }
 
 /* Loading State */
@@ -331,11 +331,44 @@
   flex-shrink: 0;
 }
 
+.cluster-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .cluster-id {
   font-size: 15px;
   font-weight: 700;
   color: var(--secondary-color);
   letter-spacing: -0.2px;
+}
+
+.class-badge {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2e7d32;
+  background: #e8f5e9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.modal-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-class-badge {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2e7d32;
+  background: #e8f5e9;
+  padding: 4px 12px;
+  border-radius: 6px;
+  width: fit-content;
 }
 
 .cluster-size {
@@ -416,6 +449,57 @@
   font-size: 14px;
   font-weight: 600;
   border-radius: 8px;
+}
+
+/* Inline Assignment UI */
+.assignment-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  animation: fadeIn 0.3s ease;
+}
+
+.assignment-ui .input-group {
+  width: 100%;
+}
+
+.assignment-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid var(--primary-color);
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  background: white;
+  transition: all 0.2s ease;
+}
+
+.assignment-input:focus {
+  box-shadow: 0 0 0 3px rgba(101, 123, 236, 0.2);
+}
+
+.assignment-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-sm {
+  padding: 8px 12px !important;
+  font-size: 16px !important;
+  min-width: 44px;
+}
+
+.assignment-ui-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.assignment-ui-footer .assignment-input {
+  flex: 1;
+  max-width: 400px;
 }
 
 .results-actions {

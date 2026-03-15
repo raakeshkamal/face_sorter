@@ -28,13 +28,14 @@ from face_sorter.utils.file_async import (
 Image.MAX_IMAGE_PIXELS = None
 
 # Set environment variable to potentially fix OpenMP conflicts
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 
 logger = logging.getLogger(__name__)
 
 
 class DeduplicationCancelledError(Exception):
     """Exception raised when deduplication is cancelled."""
+
     pass
 
 
@@ -48,14 +49,14 @@ async def load_images(source_dir: str) -> List[str]:
     Returns:
         List of image file paths.
     """
-    extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.gif', '*.webp']
+    extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp"]
     image_files = []
 
     for ext in extensions:
-        image_files.extend(glob.glob(os.path.join(source_dir, '**', ext), recursive=True))
+        image_files.extend(glob.glob(os.path.join(source_dir, "**", ext), recursive=True))
 
     for ext in extensions:
-        image_files.extend(glob.glob(os.path.join(source_dir, '**', ext.upper()), recursive=True))
+        image_files.extend(glob.glob(os.path.join(source_dir, "**", ext.upper()), recursive=True))
 
     return sorted(list(set(image_files)))
 
@@ -121,7 +122,9 @@ async def compute_clip_embeddings(
     for i in range(0, len(image_files), batch_size):
         # Check for cancellation
         if cancellation_event and cancellation_event.is_set():
-            raise DeduplicationCancelledError("Deduplication cancelled during embedding computation")
+            raise DeduplicationCancelledError(
+                "Deduplication cancelled during embedding computation"
+            )
 
         batch_paths = image_files[i : i + batch_size]
         images = []
@@ -141,35 +144,51 @@ async def compute_clip_embeddings(
             inputs = processor(images=images, return_tensors="pt", padding=True).to(device)
             with torch.no_grad():
                 outputs = model.get_image_features(**inputs)
-                
+
                 # Handle different output types from transformers
                 if not isinstance(outputs, torch.Tensor):
-                    if hasattr(outputs, 'image_embeds') and getattr(outputs, 'image_embeds', None) is not None:
+                    if (
+                        hasattr(outputs, "image_embeds")
+                        and getattr(outputs, "image_embeds", None) is not None
+                    ):
                         outputs = outputs.image_embeds
-                    elif hasattr(outputs, 'pooler_output') and getattr(outputs, 'pooler_output', None) is not None:
+                    elif (
+                        hasattr(outputs, "pooler_output")
+                        and getattr(outputs, "pooler_output", None) is not None
+                    ):
                         outputs = outputs.pooler_output
-                        if hasattr(model, 'visual_projection'):
+                        if hasattr(model, "visual_projection"):
                             if outputs.shape[-1] == model.visual_projection.in_features:
                                 outputs = model.visual_projection(outputs)
                     elif isinstance(outputs, tuple):
                         outputs = outputs[0]
                     else:
-                        outputs = outputs.last_hidden_state[:, 0, :]
-                        if hasattr(model, 'visual_projection'):
+                        outputs = outputs.last_hidden_state[:, 0]
+                        if hasattr(model, "visual_projection"):
                             if outputs.shape[-1] == model.visual_projection.in_features:
                                 outputs = model.visual_projection(outputs)
-                        
+
                 outputs = outputs / outputs.norm(p=2, dim=-1, keepdim=True)
                 embeddings.append(outputs.cpu().numpy())
         except Exception as e:
             logger.error(f"Error processing batch starting at {i}: {e}")
+
+        # Close all PIL Image objects to release file handles
+        for img in images:
+            try:
+                img.close()
+            except Exception as close_error:
+                logger.warning(f"Error closing image: {close_error}")
+        images.clear()
 
         # Report progress
         if progress_callback:
             batch_num = (i // batch_size) + 1
             total_batches = (len(image_files) + batch_size - 1) // batch_size
             current_file = batch_paths[0] if batch_paths else ""
-            progress_callback(i + batch_size, len(image_files), "Computing embeddings", current_file)
+            progress_callback(
+                i + batch_size, len(image_files), "Computing embeddings", current_file
+            )
 
     if embeddings:
         return np.vstack(embeddings).astype(np.float32)
@@ -178,7 +197,10 @@ async def compute_clip_embeddings(
 
 def _load_image_sync(path: str) -> Image.Image:
     """Synchronous helper for loading an image."""
-    return Image.open(path).convert("RGB")
+    img_original = Image.open(path)
+    rgb_img = img_original.convert("RGB")
+    img_original.close()
+    return rgb_img
 
 
 def find_duplicate_groups(
@@ -270,7 +292,9 @@ def find_duplicate_groups(
                     quality = _get_image_quality_sync(path)
                     scored_files.append((quality, path, idx))
 
-                scored_files.sort(key=lambda x: (x[0][0], x[0][1], [-ord(c) for c in x[1]]), reverse=True)
+                scored_files.sort(
+                    key=lambda x: (x[0][0], x[0][1], [-ord(c) for c in x[1]]), reverse=True
+                )
 
                 best_idx = scored_files[0][2]
                 original_path = image_files[best_idx]
@@ -338,7 +362,7 @@ async def move_duplicate_files(
                 # Ensure destination directory exists
                 dest_dir = os.path.dirname(dest_path)
                 await async_makedirs(dest_dir, exist_ok=True)
-                
+
                 # Handle filename collisions
                 counter = 1
                 while await async_file_exists(dest_path):
@@ -438,9 +462,13 @@ async def build_dedup_cache(
 
                 # Report progress after loading cache
                 if progress_callback:
-                    progress_callback(total_images, total_images, "Loaded cache from file", cache_file)
+                    progress_callback(
+                        total_images, total_images, "Loaded cache from file", cache_file
+                    )
             else:
-                logger.info(f"Cache size ({len(cached_data)}) mismatch with found images ({total_images}). Recomputing...")
+                logger.info(
+                    f"Cache size ({len(cached_data)}) mismatch with found images ({total_images}). Recomputing..."
+                )
         except Exception as e:
             logger.error(f"Could not load cache: {e}")
             embeddings = None
@@ -467,7 +495,9 @@ async def build_dedup_cache(
         duplicate_groups = len(duplicates)
         total_duplicates = sum(len(dups) for _, dups in duplicates)
 
-        logger.info(f"Found {duplicate_groups} duplicate groups with {total_duplicates} duplicate images.")
+        logger.info(
+            f"Found {duplicate_groups} duplicate groups with {total_duplicates} duplicate images."
+        )
 
         # Move duplicates
         move_result = await move_duplicate_files(
@@ -477,7 +507,12 @@ async def build_dedup_cache(
 
         # Report completion
         if progress_callback:
-            progress_callback(total_images, total_images, "Complete", f"Found {duplicate_groups} groups, {moved_duplicates} duplicates")
+            progress_callback(
+                total_images,
+                total_images,
+                "Complete",
+                f"Found {duplicate_groups} groups, {moved_duplicates} duplicates",
+            )
 
         return DeduplicationResult(
             total_images=total_images,
